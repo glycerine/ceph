@@ -1215,6 +1215,9 @@ AC_ARG_WITH(
     ]
 )
 
+PKG_CHECK_MODULES(LUA, luajit, [HAVE_LUA=1], [HAVE_LUA=0])
+AM_CONDITIONAL([HAVE_LUA], test "$HAVE_LUA" -eq 1)
+
 # Checks for typedefs, structures, and compiler characteristics.
 #AC_HEADER_STDBOOL
 #AC_C_CONST

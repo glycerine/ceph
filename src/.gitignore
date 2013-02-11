@@ -93,3 +93,5 @@ Makefile
 /mkcephfs
 /.ceph_port
 /store_test_temp_dir
+/test/cls_lua/test_script.h
+/txt2str
