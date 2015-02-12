@@ -854,6 +854,13 @@ ceph_test_cls_hello_LDADD = \
 ceph_test_cls_hello_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 bin_DEBUGPROGRAMS += ceph_test_cls_hello
 
+ceph_test_cls_jvm_SOURCES = test/cls_jvm/test_cls_jvm.cc
+ceph_test_cls_jvm_LDADD = \
+	$(LIBRADOS) $(CRYPTO_LIBS) \
+	$(UNITTEST_LDADD) $(CEPH_GLOBAL) $(RADOS_TEST_LDADD)
+ceph_test_cls_jvm_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_test_cls_jvm
+
 if WITH_RADOSGW
 ceph_test_cls_rgw_SOURCES = test/cls_rgw/test_cls_rgw.cc
 ceph_test_cls_rgw_LDADD = \

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 export PYTHONPATH=./pybind
-export LD_LIBRARY_PATH=.libs
+export LD_LIBRARY_PATH=.libs:/usr/lib/jvm/java-1.7.0-openjdk-1.7.0.75-2.5.4.2.fc20.x86_64/jre/lib/amd64/server
 export DYLD_LIBRARY_PATH=$LD_LIBRARY_PATH
 
 
@@ -13,10 +13,10 @@ set -e
 [ -z "$CEPH_NUM_MDS" ] && CEPH_NUM_MDS="$MDS"
 [ -z "$CEPH_NUM_RGW" ] && CEPH_NUM_RGW="$RGW"
 
-[ -z "$CEPH_NUM_MON" ] && CEPH_NUM_MON=3
-[ -z "$CEPH_NUM_OSD" ] && CEPH_NUM_OSD=3
-[ -z "$CEPH_NUM_MDS" ] && CEPH_NUM_MDS=3
-[ -z "$CEPH_NUM_RGW" ] && CEPH_NUM_RGW=1
+[ -z "$CEPH_NUM_MON" ] && CEPH_NUM_MON=1
+[ -z "$CEPH_NUM_OSD" ] && CEPH_NUM_OSD=1
+[ -z "$CEPH_NUM_MDS" ] && CEPH_NUM_MDS=0
+[ -z "$CEPH_NUM_RGW" ] && CEPH_NUM_RGW=0
 
 [ -z "$CEPH_DIR" ] && CEPH_DIR="$PWD"
 [ -z "$CEPH_DEV_DIR" ] && CEPH_DEV_DIR="$CEPH_DIR/dev"

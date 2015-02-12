@@ -57,6 +57,12 @@ libcls_rgw_la_LIBADD = libjson_spirit.la $(PTHREAD_LIBS) $(EXTRALIBS)
 libcls_rgw_la_LDFLAGS = ${AM_LDFLAGS} -module -avoid-version -shared -export-symbols-regex '.*__cls_.*'
 radoslib_LTLIBRARIES += libcls_rgw.la
 
+libcls_jvm_la_SOURCES = cls/jvm/cls_jvm.cc
+libcls_jvm_la_LIBADD = $(PTHREAD_LIBS) $(EXTRALIBS)
+libcls_jvm_la_CPPFLAGS = $(JDK_CPPFLAGS) $(AM_CPPFLAGS)
+libcls_jvm_la_LDFLAGS = -L/usr/lib/jvm/java-1.7.0-openjdk-1.7.0.75-2.5.4.2.fc20.x86_64/jre/lib/amd64/server ${AM_LDFLAGS} -ljvm -module -avoid-version -shared -export-symbols-regex '.*__cls_.*'
+radoslib_LTLIBRARIES += libcls_jvm.la
+
 ## Rados object client classes
 
 libcls_lock_client_la_SOURCES = \
