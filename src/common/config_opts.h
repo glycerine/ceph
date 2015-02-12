@@ -1011,3 +1011,9 @@ OPTION(throttler_perf_counter, OPT_BOOL, true) // enable/disable throttler perf 
 // This will be set to true when it is safe to start threads.
 // Once it is true, it will never change.
 OPTION(internal_safe_to_start_threads, OPT_BOOL, false)
+
+/*
+ *
+ */
+OPTION(cls_jvm_classpath_default, OPT_STR, "/usr/lib/java")
+OPTION(cls_jvm_classpath_extra, OPT_STR, "")

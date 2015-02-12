@@ -3,14 +3,7 @@ import java.nio.ByteBuffer;
 
 class RadosObjectClass {
 
-  interface BufferList {
-    void clear();
-    int size();
-  }
-
   interface Context {
-    BufferList getInputBufferList();
-
     void Log(int level, String msg);
     void Remove();
     void Create(boolean exclusive);
@@ -18,8 +11,6 @@ class RadosObjectClass {
 
   static class MyObjectClass {
     static void Echo(Context ctx) {
-      bufferlist bl = ctx.getInput();
-      ctx.setOutput(bl);
     }
   }
 
@@ -40,25 +31,6 @@ class RadosObjectClass {
 
     public void Create(boolean exclusive) {
       RadosObjectClass.native_cls_create(hctxp, exclusive);
-    }
-  }
-
-  /*
-   *
-   */
-  static class BufferListImpl implements BufferList {
-    private long blp;
-
-    BufferListImpl(long blp) {
-      this.blp = blp;
-    }
-
-    void clear() {
-      RadosObjectClass.native_bl_clear(blp);
-    }
-
-    int size() {
-      return RadosObjectClass.native_bl_size(blp);
     }
   }
 

@@ -4,12 +4,14 @@
 
 #include "common/errno.h"
 #include "objclass/objclass.h"
+#include "common/config.h"
+#include "global/global_context.h"
   
 CLS_VER(1,0)
 CLS_NAME(jvm)
 
 cls_handle_t h_class;
-cls_method_handle_t h_test;
+cls_method_handle_t h_java_route;
 
 static JavaVM *jvm;
 static jclass wrapper_cls;
@@ -22,7 +24,40 @@ static JNIEnv *getJniEnv() {
   return env;
 }
 
-static int test(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+/*
+ * JNI interface: cls_cxx_remove
+ */
+static void native_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
+{
+  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
+  int ret = cls_cxx_remove(hctx);
+  CLS_LOG(0, "jvm_remove: %d", ret);
+}
+
+/*
+ * JNI interface: cls_cxx_create
+ */
+static void native_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexclusive)
+{
+  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
+  int ret = cls_cxx_create(hctx, static_cast<bool>(jexclusive));
+  CLS_LOG(0, "jvm_create: %d", ret);
+}
+
+/*
+ * JNI interface: cls_log
+ */
+static void jni_cls_log(JNIEnv *env, jclass clazz, jint jlevel, jstring jmsg)
+{
+  const char *msg = env->GetStringUTFChars(jmsg, NULL);
+  cls_log(static_cast<int>(jlevel), "%s", msg);
+  env->ReleaseStringUTFChars(jmsg, msg);
+}
+
+/*
+ * Object class handle that routes requests to Java
+ */
+static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
 {
   JNIEnv *env = getJniEnv();
 
@@ -50,6 +85,8 @@ static int test(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   return 0;
 }
 
+
+
 static void native_bl_append(JNIEnv *env, jclass clazz, jlong jblp, jobject jbuf)
 {
   bufferlist *bl = reinterpret_cast<bufferlist*>(jblp);
@@ -72,43 +109,18 @@ static jint native_bl_size(JNIEnv *env, jclass clazz, jlong jblp)
 }
 
 /*
+ * JVM adapter that dumps log output to cls_log.
  *
+ * TODO: the JVM assumes an output stream (see @fp parameter) and will call
+ * this method multiple times while constructing a single message. Since we
+ * don't do any buffering here, the OSD output can be difficult to read since
+ * each call corresponds to a newline in the OSD log.
  */
-static void native_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
-{
-  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
-  int ret = cls_cxx_remove(hctx);
-  CLS_LOG(0, "jvm_remove: %d", ret);
-}
-
-/*
- *
- */
-static void native_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexclusive)
-{
-  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
-  int ret = cls_cxx_create(hctx, static_cast<bool>(jexclusive));
-  CLS_LOG(0, "jvm_create: %d", ret);
-}
-
-/*
- *
- */
-static void cls_jvm_vfprintf(FILE *fp, const char *format, va_list ap)
+static void jvm_vfprintf_callback(FILE *fp, const char *format, va_list ap)
 {
   char buf[4096];
   vsnprintf(buf, sizeof(buf), format, ap);
   CLS_LOG(0, "%s", buf);
-}
-
-/*
- *
- */
-static void jni_cls_log(JNIEnv *env, jclass clazz, jint jlevel, jstring jmsg)
-{
-  const char *msg = env->GetStringUTFChars(jmsg, NULL);
-  cls_log(static_cast<int>(jlevel), "%s", msg);
-  env->ReleaseStringUTFChars(jmsg, msg);
 }
 
 void __cls_init()
@@ -124,9 +136,23 @@ void __cls_init()
   vm_args.nOptions = 2;
   JavaVMOption options[vm_args.nOptions];
 
-  options[0].optionString = (char*)"-Djava.class.path=/usr/lib/java:/tmp";
+  /*
+   * Setup CLASSPATH
+   */
+  stringstream cp_ss;
+
+  cp_ss << "-Djava.class.path=";
+  cp_ss << g_conf->cls_jvm_classpath_default;
+
+  if (!g_conf->cls_jvm_classpath_extra.empty())
+    cp_ss << ":" << g_conf->cls_jvm_classpath_extra;
+
+  string cp = cp_ss.str();
+  CLS_LOG(0, "setting classpath = %s", cp.c_str());
+  options[0].optionString = (char*)cp.c_str();
+
   options[1].optionString = (char*)"vfprintf";
-  options[1].extraInfo = (void*)cls_jvm_vfprintf;
+  options[1].extraInfo = (void*)jvm_vfprintf_callback;
 
   vm_args.options = options;
 
@@ -192,7 +218,7 @@ void __cls_init()
 
   cls_register("jvm", &h_class);
 
-  cls_register_cxx_method(h_class, "test",
+  cls_register_cxx_method(h_class, "java_route",
       CLS_METHOD_RD | CLS_METHOD_WR,
-      test, &h_test);
+      java_route, &h_java_route);
 }
