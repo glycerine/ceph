@@ -1,4 +1,12 @@
-
+/*
+ * Todo/Ideas:
+ * - The OSD can proactively run GC during idle periods
+ * - Checkout the various GC options (e.g. prefer young generation)
+ * - Checkout all VM options. There are a lot.
+ * - Avoid creating the VM in init() because this gives us more flexibility to
+ *   construct things like a create/destroy VM method call which could fail,
+ *   or to allow multiple VMs to exist and route based on a request parameter.
+ */
 #include <errno.h>
 #include <jni.h>
 
@@ -27,7 +35,7 @@ static JNIEnv *getJniEnv() {
 /*
  * JNI interface: cls_cxx_remove
  */
-static void native_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
+static void jni_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
 {
   cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
   int ret = cls_cxx_remove(hctx);
@@ -37,7 +45,7 @@ static void native_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
 /*
  * JNI interface: cls_cxx_create
  */
-static void native_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexclusive)
+static void jni_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexclusive)
 {
   cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
   int ret = cls_cxx_create(hctx, static_cast<bool>(jexclusive));
@@ -55,6 +63,23 @@ static void jni_cls_log(JNIEnv *env, jclass clazz, jint jlevel, jstring jmsg)
 }
 
 /*
+ * JNI interface: return a ByteBuffer backed by a bufferlist.
+ */
+static jobject jni_bl_get_bytebuffer(JNIEnv *env, jclass clazz, jlong jbl)
+{
+  bufferlist *bl = reinterpret_cast<bufferlist*>(jbl);
+
+  jobject ret = env->NewDirectByteBuffer(bl->c_str(), bl->length());
+  if (!ret) {
+    env->ExceptionDescribe();
+    CLS_LOG(0, "ERROR: failed to create direct byte buffer");
+    return NULL;
+  }
+
+  return ret;
+}
+
+/*
  * Object class handle that routes requests to Java
  */
 static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
@@ -62,15 +87,8 @@ static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out
   JNIEnv *env = getJniEnv();
 
   jlong jhctx = reinterpret_cast<jlong>(hctx);
+  jlong jin = reinterpret_cast<jlong>(in);
   jlong jout = reinterpret_cast<jlong>(out);
-
-  jobject jin = env->NewDirectByteBuffer(in->c_str(), in->length());
-  if (!jin) {
-    env->ExceptionDescribe();
-    env->ExceptionClear();
-    CLS_LOG(0, "ERROR: failed to allocate direct byte buffer");
-    return -EIO;
-  }
 
   jint ret = env->CallStaticIntMethod(wrapper_cls, wrapper_mid, jhctx, jin, jout);
   if (env->ExceptionOccurred()) {
@@ -83,29 +101,6 @@ static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out
   jvm->DetachCurrentThread();
 
   return 0;
-}
-
-
-
-static void native_bl_append(JNIEnv *env, jclass clazz, jlong jblp, jobject jbuf)
-{
-  bufferlist *bl = reinterpret_cast<bufferlist*>(jblp);
-  bl->append(
-      static_cast<char*>(env->GetDirectBufferAddress(jbuf)),
-      static_cast<jlong>(env->GetDirectBufferCapacity(jbuf))
-  );
-}
-
-static void native_bl_clear(JNIEnv *env, jclass clazz, jlong jblp)
-{
-  bufferlist *bl = reinterpret_cast<bufferlist*>(jblp);
-  bl->clear();
-}
-
-static jint native_bl_size(JNIEnv *env, jclass clazz, jlong jblp)
-{
-  bufferlist *bl = reinterpret_cast<bufferlist*>(jblp);
-  return static_cast<jint>(bl->length());
 }
 
 /*
@@ -148,9 +143,13 @@ void __cls_init()
     cp_ss << ":" << g_conf->cls_jvm_classpath_extra;
 
   string cp = cp_ss.str();
-  CLS_LOG(0, "setting classpath = %s", cp.c_str());
   options[0].optionString = (char*)cp.c_str();
 
+  CLS_LOG(0, "setting classpath = %s", cp.c_str());
+
+  /*
+   * Setup JVM reporting
+   */
   options[1].optionString = (char*)"vfprintf";
   options[1].extraInfo = (void*)jvm_vfprintf_callback;
 
@@ -168,23 +167,26 @@ void __cls_init()
     return;
   }
 
+  /*
+   * Register native methods
+   */
   std::vector<JNINativeMethod> native_methods;
-#define ADD_NATIVE_METHOD(n, s, fnp) do { \
-    JNINativeMethod __m; \
-    __m.name = (char*)(n); \
-    __m.signature = (char*)(s); \
-    __m.fnPtr = (void*)(fnp); \
-    native_methods.push_back(__m); \
+
+#define save_native_method(_name, _funcptr, _sig) do { \
+    JNINativeMethod m; \
+    m.name = (char *)(_name); \
+    m.signature = (char *)(_sig); \
+    m.fnPtr = (void *)(_funcptr); \
+    native_methods.push_back(m); \
   } while (0)
 
-  ADD_NATIVE_METHOD("cls_log", "(ILjava/lang/String;)V", jni_cls_log);
-  ADD_NATIVE_METHOD("native_cls_remove", "(J)V", native_cls_remove);
-  ADD_NATIVE_METHOD("native_cls_create", "(JZ)V", native_cls_create);
+  save_native_method("cls_log",    jni_cls_log,    "(ILjava/lang/String;)V");
+  save_native_method("cls_remove", jni_cls_remove, "(J)V");
+  save_native_method("cls_create", jni_cls_create, "(JZ)V");
 
-  ADD_NATIVE_METHOD("native_bl_clear", "(J)V", native_bl_clear);
-  ADD_NATIVE_METHOD("native_bl_size", "(J)I", native_bl_size);
-  ADD_NATIVE_METHOD("native_bl_append", "(JLjava/nio/ByteBuffer;)V", native_bl_append);
+  save_native_method("bl_get_bytebuffer", jni_bl_get_bytebuffer, "(J)Ljava/nio/ByteBuffer;");
 
+#undef save_native_method
 
   ret = env->RegisterNatives(wrapper_cls, &native_methods[0], native_methods.size());
   if (ret) {
@@ -192,8 +194,7 @@ void __cls_init()
     return;
   }
 
-  wrapper_mid = env->GetStaticMethodID(wrapper_cls,
-      "cls_handle_wrapper", "(JLjava/nio/ByteBuffer;J)I");
+  wrapper_mid = env->GetStaticMethodID(wrapper_cls, "cls_handle_wrapper", "(JJJ)I");
   if (!wrapper_mid) {
     CLS_LOG(0, "ERROR: failed to load wrapper");
     return;
