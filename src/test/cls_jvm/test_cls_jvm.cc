@@ -16,7 +16,13 @@ TEST(ClsJvm, TestSimple) {
 
   bufferlist in, out;
   ASSERT_EQ(0, ioctx.write_full("obj", in));
-  ioctx.exec("obj", "jvm", "java_route", in, out);
+
+  bufferlist p_in, p_out;
+  p_in.append("this is my input");
+
+  int ret = ioctx.exec("obj", "jvm", "java_route", p_in, p_out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(p_in, p_out);
 
   ASSERT_EQ(0, destroy_one_pool_pp(pool_name, cluster));
 }

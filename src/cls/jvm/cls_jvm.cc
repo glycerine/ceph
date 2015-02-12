@@ -80,6 +80,16 @@ static jobject jni_bl_get_bytebuffer(JNIEnv *env, jclass clazz, jlong jbl)
 }
 
 /*
+ * JNI interface: append bufferlist to another bufferlist.
+ */
+static void jni_bl_append_bl(JNIEnv *env, jclass clazz, jlong jdst, jlong jsrc)
+{
+  bufferlist *dst = reinterpret_cast<bufferlist*>(jdst);
+  bufferlist *src = reinterpret_cast<bufferlist*>(jsrc);
+  dst->append(*src);
+}
+
+/*
  * Object class handle that routes requests to Java
  */
 static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
@@ -100,7 +110,7 @@ static int java_route(cls_method_context_t hctx, bufferlist *in, bufferlist *out
 
   jvm->DetachCurrentThread();
 
-  return 0;
+  return ret;
 }
 
 /*
@@ -185,6 +195,7 @@ void __cls_init()
   save_native_method("cls_create", jni_cls_create, "(JZ)V");
 
   save_native_method("bl_get_bytebuffer", jni_bl_get_bytebuffer, "(J)Ljava/nio/ByteBuffer;");
+  save_native_method("bl_append", jni_bl_append_bl, "(JJ)V");
 
 #undef save_native_method
 

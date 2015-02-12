@@ -9,10 +9,12 @@ class RadosObjectClass {
 
   interface BufferList {
     ByteBuffer getBytes();
+    void append(BufferList bl);
   }
 
   interface Context {
     BufferList getInput();
+    BufferList getOutput();
     void Log(int level, String msg);
     void Remove();
     void Create(boolean exclusive);
@@ -24,6 +26,8 @@ class RadosObjectClass {
 
   static class MyObjectClass {
     static void Echo(Context ctx) {
+      BufferList output = ctx.getOutput();
+      output.append(ctx.getInput());
     }
   }
 
@@ -37,6 +41,11 @@ class RadosObjectClass {
 
     public ByteBuffer getBytes() {
       return bl_get_bytebuffer(handle);
+    }
+
+    public void append(BufferList bl) {
+      assert bl instanceof BufferListImpl;
+      bl_append(handle, ((BufferListImpl)bl).handle);
     }
   }
 
@@ -53,6 +62,10 @@ class RadosObjectClass {
 
     public BufferList getInput() {
       return new BufferListImpl(inbl);
+    }
+
+    public BufferList getOutput() {
+      return new BufferListImpl(outbl);
     }
 
     public void Log(int level, String msg) {
@@ -76,7 +89,7 @@ class RadosObjectClass {
     MyObjectClass.Echo(ctx);
 
     cls_log(0, "ptr = " + inbl);
-    return 3;
+    return 0;
   }
 
   private RadosObjectClass() {}
@@ -86,4 +99,5 @@ class RadosObjectClass {
   private static native void cls_create(long ctx, boolean excl);
 
   private static native ByteBuffer bl_get_bytebuffer(long handle);
+  private static native void bl_append(long dst, long src);
 }
