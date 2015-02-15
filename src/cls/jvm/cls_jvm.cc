@@ -53,6 +53,35 @@ static void jni_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexc
 }
 
 /*
+ * JNI interface: cls_cxx_read
+ */
+static jlong jni_cls_read(JNIEnv *env, jclass clazz, jlong jhctx, jint joffset, jint jlength)
+{
+  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
+  bufferlist *bl = new bufferlist; // FIXME: memory leak... never deleted
+  int ret = cls_cxx_read(hctx,
+      static_cast<int>(joffset),
+      static_cast<int>(jlength),
+      bl);
+  CLS_LOG(0, "jvm_read: %d", ret);
+  return reinterpret_cast<jlong>(bl);
+}
+
+/*
+ * JNI interface: cls_cxx_write
+ */
+static void jni_cls_write(JNIEnv *env, jclass clazz, jlong jhctx, jint joffset, jint jlength, jlong jbl)
+{
+  cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
+  bufferlist *bl = reinterpret_cast<bufferlist*>(jbl);
+  int ret = cls_cxx_write(hctx,
+      static_cast<int>(joffset),
+      static_cast<int>(jlength),
+      bl);
+  CLS_LOG(0, "jvm_write: %d", ret);
+}
+
+/*
  * JNI interface: cls_log
  */
 static void jni_cls_log(JNIEnv *env, jclass clazz, jint jlevel, jstring jmsg)
@@ -77,6 +106,15 @@ static jobject jni_bl_get_bytebuffer(JNIEnv *env, jclass clazz, jlong jbl)
   }
 
   return ret;
+}
+
+/*
+ * JNI interface: return the length of a bufferlist
+ */
+static jint jni_bl_get_length(JNIEnv *env, jclass clazz, jlong jbl)
+{
+  bufferlist *bl = reinterpret_cast<bufferlist*>(jbl);
+  return static_cast<jint>(bl->length());
 }
 
 /*
@@ -193,9 +231,12 @@ void __cls_init()
   save_native_method("cls_log",    jni_cls_log,    "(ILjava/lang/String;)V");
   save_native_method("cls_remove", jni_cls_remove, "(J)V");
   save_native_method("cls_create", jni_cls_create, "(JZ)V");
+  save_native_method("cls_read",   jni_cls_read,   "(JII)J");
+  save_native_method("cls_write",  jni_cls_write,  "(JIIJ)V");
 
   save_native_method("bl_get_bytebuffer", jni_bl_get_bytebuffer, "(J)Ljava/nio/ByteBuffer;");
   save_native_method("bl_append", jni_bl_append_bl, "(JJ)V");
+  save_native_method("bl_get_length", jni_bl_get_length, "(J)I");
 
 #undef save_native_method
 
