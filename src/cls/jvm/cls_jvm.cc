@@ -6,6 +6,8 @@
  * - Avoid creating the VM in init() because this gives us more flexibility to
  *   construct things like a create/destroy VM method call which could fail,
  *   or to allow multiple VMs to exist and route based on a request parameter.
+ * - add errno handling (check out android libcore.io stuff)
+ * - http://stackoverflow.com/questions/1715036/how-do-i-create-a-java-sandbox 
  */
 #include <errno.h>
 #include <jni.h>
@@ -39,7 +41,6 @@ static void jni_cls_remove(JNIEnv *env, jclass clazz, jlong jhctx)
 {
   cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
   int ret = cls_cxx_remove(hctx);
-  CLS_LOG(0, "jvm_remove: %d", ret);
 }
 
 /*
@@ -49,7 +50,6 @@ static void jni_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexc
 {
   cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
   int ret = cls_cxx_create(hctx, static_cast<bool>(jexclusive));
-  CLS_LOG(0, "jvm_create: %d", ret);
 }
 
 /*
@@ -58,12 +58,11 @@ static void jni_cls_create(JNIEnv *env, jclass clazz, jlong jhctx, jboolean jexc
 static jlong jni_cls_read(JNIEnv *env, jclass clazz, jlong jhctx, jint joffset, jint jlength)
 {
   cls_method_context_t hctx = reinterpret_cast<cls_method_context_t>(jhctx);
-  bufferlist *bl = new bufferlist; // FIXME: memory leak... never deleted
+  bufferlist *bl = new bufferlist;
   int ret = cls_cxx_read(hctx,
       static_cast<int>(joffset),
       static_cast<int>(jlength),
       bl);
-  CLS_LOG(0, "jvm_read: %d", ret);
   return reinterpret_cast<jlong>(bl);
 }
 
@@ -78,7 +77,6 @@ static void jni_cls_write(JNIEnv *env, jclass clazz, jlong jhctx, jint joffset, 
       static_cast<int>(joffset),
       static_cast<int>(jlength),
       bl);
-  CLS_LOG(0, "jvm_write: %d", ret);
 }
 
 /*
@@ -115,6 +113,15 @@ static jint jni_bl_get_length(JNIEnv *env, jclass clazz, jlong jbl)
 {
   bufferlist *bl = reinterpret_cast<bufferlist*>(jbl);
   return static_cast<jint>(bl->length());
+}
+
+/*
+ * JNI interface: delete a bufferlist
+ */
+static void jni_bl_free(JNIEnv *env, jclass clazz, jlong jbl)
+{
+  bufferlist *bl = reinterpret_cast<bufferlist*>(jbl);
+  delete bl;
 }
 
 /*
@@ -235,8 +242,9 @@ void __cls_init()
   save_native_method("cls_write",  jni_cls_write,  "(JIIJ)V");
 
   save_native_method("bl_get_bytebuffer", jni_bl_get_bytebuffer, "(J)Ljava/nio/ByteBuffer;");
-  save_native_method("bl_append", jni_bl_append_bl, "(JJ)V");
-  save_native_method("bl_get_length", jni_bl_get_length, "(J)I");
+  save_native_method("bl_append",         jni_bl_append_bl,      "(JJ)V");
+  save_native_method("bl_get_length",     jni_bl_get_length,     "(J)I");
+  save_native_method("bl_free",           jni_bl_free,           "(J)V");
 
 #undef save_native_method
 

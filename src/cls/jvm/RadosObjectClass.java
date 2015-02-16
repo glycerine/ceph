@@ -11,6 +11,7 @@ class RadosObjectClass {
     ByteBuffer getBytes();
     void append(BufferList bl);
     int length();
+    void dispose();
   }
 
   interface Context {
@@ -32,13 +33,19 @@ class RadosObjectClass {
   static class MyObjectClass {
     static void Echo(Context ctx) {
       // EchoParams
-      BufferList output = ctx.getOutput();
-      output.append(ctx.getInput());
+      //BufferList output = ctx.getOutput();
+      //output.append(ctx.getInput());
+      //output.dispose();
+      //output.dispose();
 
       // EchoWrite
-      //BufferList output = ctx.getOutput();
-      //BufferList data = ctx.read(0, 0);
-      //output.append(data);
+      BufferList output = ctx.getOutput();
+      BufferList data = ctx.read(0, 0);
+      output.append(data);
+      output.dispose();
+      output.dispose();
+      data.dispose();
+      data.dispose();
 
       // EchoRead
       //BufferList input = ctx.getInput();
@@ -49,8 +56,9 @@ class RadosObjectClass {
   static class BufferListImpl implements BufferList {
 
     long handle;
+    boolean owned;
 
-    BufferListImpl(long inbl) {
+    BufferListImpl(long inbl, boolean owned) {
       this.handle = inbl;
     }
 
@@ -66,6 +74,18 @@ class RadosObjectClass {
     public int length() {
       return bl_get_length(handle);
     }
+
+    public final synchronized void dispose() {
+      if (owned)
+        RadosObjectClass.bl_free(handle);
+      owned = false;
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+      dispose();
+      super.finalize();
+    }
   }
 
   static class ContextImpl implements Context {
@@ -80,11 +100,11 @@ class RadosObjectClass {
     }
 
     public BufferList getInput() {
-      return new BufferListImpl(inbl);
+      return new BufferListImpl(inbl, false);
     }
 
     public BufferList getOutput() {
-      return new BufferListImpl(outbl);
+      return new BufferListImpl(outbl, false);
     }
 
     public void log(int level, String msg) {
@@ -101,7 +121,7 @@ class RadosObjectClass {
 
     public BufferList read(int offset, int length) {
       long bl = RadosObjectClass.cls_read(hctxp, offset, length);
-      return new BufferListImpl(bl);
+      return new BufferListImpl(bl, true);
     }
 
     public void write(int offset, int length, BufferList bl) {
@@ -133,4 +153,5 @@ class RadosObjectClass {
   private static native ByteBuffer bl_get_bytebuffer(long handle);
   private static native void bl_append(long dst, long src);
   private static native int bl_get_length(long handle);
+  private static native void bl_free(long handle);
 }
