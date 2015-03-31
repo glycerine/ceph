@@ -38,6 +38,7 @@ include rbd_replay/Makefile.am
 include test/Makefile.am
 include tools/Makefile.am
 include Makefile-rocksdb.am
+include tabular/Makefile.am
 
 
 # shell scripts

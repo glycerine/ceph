@@ -57,4 +57,9 @@ libcls_rgw_la_SOURCES = \
 libcls_rgw_la_LIBADD = libjson_spirit.la $(PTHREAD_LIBS) $(EXTRALIBS)
 libcls_rgw_la_LDFLAGS = ${AM_LDFLAGS} -module -avoid-version -shared -export-symbols-regex '.*__cls_.*'
 radoslib_LTLIBRARIES += libcls_rgw.la
+
+libcls_tabular_la_SOURCES = \
+    cls/tabular/cls_tabular.cc
+radoslib_LTLIBRARIES += libcls_tabular.la
+
 endif # WITH_OSD

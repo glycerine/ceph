@@ -79,6 +79,10 @@ rbd_fuse_LDADD = -lfuse $(LIBRBD) $(LIBRADOS) $(CEPH_GLOBAL)
 bin_PROGRAMS += rbd-fuse
 endif # WITH_FUSE
 
+tabular_put_SOURCES = tabular_put.cc
+tabular_put_CXXFLAGS = -std=c++11 $(AM_CXXFLAGS)
+tabular_put_LDADD = $(LIBRADOS) $(CEPH_GLOBAL) libcls_tabular_client.la
+bin_PROGRAMS += tabular_put
 
 if WITH_CEPHFS
 cephfs_SOURCES = cephfs.cc

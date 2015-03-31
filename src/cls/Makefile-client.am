@@ -48,6 +48,10 @@ DENCODER_DEPS += libcls_user_client.a
 
 noinst_LIBRARIES += libcls_user_client.a
 
+libcls_tabular_client_la_SOURCES = \
+    cls/tabular/cls_tabular_client.cc
+noinst_LTLIBRARIES += libcls_tabular_client.la
+
 noinst_HEADERS += \
 	cls/lock/cls_lock_types.h \
 	cls/lock/cls_lock_ops.h \
