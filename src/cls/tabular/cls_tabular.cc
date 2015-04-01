@@ -52,25 +52,45 @@ struct cls_tabular_header {
   uint64_t lower_bound;
   uint64_t upper_bound;
 
+  uint64_t lower_bound_seen;
+  uint64_t upper_bound_seen;
+
   std::vector<uint64_t> split_points;
+
+  cls_tabular_header() {
+    lower_bound = 0;
+    upper_bound = (uint64_t)-1;
+    total_entries = 0;
+    effective_entries = 0;
+  }
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
     ::encode(total_entries, bl);
     ::encode(effective_entries, bl);
+    ::encode(lower_bound, bl);
+    ::encode(upper_bound, bl);
+    ::encode(lower_bound_seen, bl);
+    ::encode(upper_bound_seen, bl);
+    ::encode(split_points, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& bl) {
     DECODE_START(1, bl);
-    ::decode(max_marker, bl);
-    ::decode(max_time, bl);
+    ::decode(total_entries, bl);
+    ::decode(effective_entries, bl);
+    ::decode(lower_bound, bl);
+    ::decode(upper_bound, bl);
+    ::decode(lower_bound_seen, bl);
+    ::decode(upper_bound_seen, bl);
+    ::decode(split_points, bl);
     DECODE_FINISH(bl);
   }
 };
-WRITE_CLASS_ENCODER(cls_log_header)
+WRITE_CLASS_ENCODER(cls_tabular_header)
 
-static int read_header(cls_method_context_t hctx, cls_log_header& header)
+static int read_header(cls_method_context_t hctx, cls_tabular_header& header)
 {
   bufferlist header_bl;
 
@@ -79,7 +99,7 @@ static int read_header(cls_method_context_t hctx, cls_log_header& header)
     return ret;
 
   if (header_bl.length() == 0) {
-    header = cls_log_header();
+    header = cls_tabular_header();
     return 0;
   }
 
@@ -89,6 +109,18 @@ static int read_header(cls_method_context_t hctx, cls_log_header& header)
   } catch (buffer::error& err) {
     CLS_LOG(0, "ERROR: read_header(): failed to decode header");
   }
+
+  return 0;
+}
+
+static int write_header(cls_method_context_t hctx, cls_tabular_header& header)
+{
+  bufferlist header_bl;
+  ::encode(header, header_bl);
+
+  int ret = cls_cxx_map_write_header(hctx, &header_bl);
+  if (ret < 0)
+    return ret;
 
   return 0;
 }
@@ -105,14 +137,66 @@ static int cls_tabular_put(cls_method_context_t hctx,
     return -EINVAL;
   }
 
-  map<string, bufferlist> entries;
-  for (vector<string>::iterator it = op.entries.begin(); it != op.entries.end(); it++) {
-    entries[*it] = bufferlist();
+  cls_tabular_header header;
+  int ret = read_header(hctx, header);
+  if (ret < 0) {
+    CLS_ERR("ERROR: cls_tabular_put: failed to read header");
+    return ret;
   }
 
-  int ret = cls_cxx_map_set_vals(hctx, &entries);
+  map<string, bufferlist> entries;
+  for (vector<string>::iterator it = op.entries.begin(); it != op.entries.end(); it++) {
+    std::string& key = *it;
 
-  return ret;
+    entries[key] = bufferlist();
+
+    uint64_t key_val;
+    int ret = strtou64(*it, &key_val);
+    if (ret < 0)
+      return ret;
+
+    if (key_val < header.lower_bound || key_val > header.upper_bound) {
+      CLS_ERR("ERROR: cls_tabular_put: out of range");
+      return -ERANGE;
+    }
+
+    if (header.total_entries == 0) {
+      header.lower_bound_seen = key_val;
+      header.upper_bound_seen = key_val;
+    }
+
+    header.total_entries++;
+    header.effective_entries++;
+
+    if (key_val < header.lower_bound_seen)
+      header.lower_bound_seen = key_val;
+    if (key_val > header.upper_bound_seen)
+      header.upper_bound_seen = key_val;
+  }
+
+  ret = cls_cxx_map_set_vals(hctx, &entries);
+  if (ret < 0) {
+    CLS_ERR("ERROR: cls_tabular_put: failed to write entries");
+    return ret;
+  }
+
+  if (header.effective_entries > 1000) {
+    uint64_t split_point = header.lower_bound_seen + ((header.upper_bound_seen -
+        header.lower_bound_seen) / 2);
+    CLS_ERR("cls_tabular_put: split: entries %lu lower %lu upper %lu split %lu\n",
+        header.effective_entries,
+        header.lower_bound_seen,
+        header.upper_bound_seen,
+        split_point);
+  }
+
+  ret = write_header(hctx, header);
+  if (ret < 0) {
+    CLS_ERR("cls_tabular_put: failed to write header");
+    return ret;
+  }
+
+  return 0;
 }
 
 void __cls_init()

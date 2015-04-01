@@ -84,6 +84,8 @@ int main(int argc, char **argv)
     cls_tabular_put(op, entries);
 
     int ret = ioctx.operate(objname, &op);
+    if (ret < 0)
+      fprintf(stderr, "ret=%d e=%s\n", ret, strerror(-ret));
     assert(ret == 0);
   }
 
