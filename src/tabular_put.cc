@@ -8,8 +8,47 @@
 #include <sstream>
 #include <iostream>
 #include <random>
+#include <thread>
 #include "include/rados/librados.hpp"
 #include "cls/tabular/cls_tabular_client.h"
+
+struct table {
+  librados::IoCtx& ioctx;
+  std::string head;
+
+  /*
+   * poll for new splits. this should be replaced by watch/notify.
+   */
+  std::thread *watch;
+  void watch_func() {
+    while (1) {
+      sleep(1);
+      std::cout << "Asdf" << std::endl;
+    }
+  }
+
+  table(librados::IoCtx& ioctx, std::string head) :
+    ioctx(ioctx), head(head) {
+      watch = new std::thread(&table::watch_func, *this);
+  }
+
+  int put(std::string entry) {
+    std::vector<std::string> entries;
+    entries.push_back(entry);
+    return put(entries);
+  }
+
+  int put(std::vector<std::string>& entries) {
+    librados::ObjectWriteOperation op;
+    cls_tabular_put(op, entries);
+
+    int ret = ioctx.operate(head, &op);
+    if (ret < 0)
+      fprintf(stderr, "ret=%d e=%s\n", ret, strerror(-ret));
+    assert(ret == 0);
+    return 0;
+  }
+};
 
 /*
  *  * Convert value into zero-padded string for omap comparisons.
@@ -73,20 +112,18 @@ int main(int argc, char **argv)
   std::default_random_engine generator;
   std::uniform_int_distribution<uint64_t> distribution(0, 1ULL<<32);
 
+  table t(ioctx, "Asdf");
+
   while (1) {
     std::vector<std::string> entries;
     for (unsigned i = 0; i < 1; i++) {
       uint64_t key = distribution(generator);
       entries.push_back(u64tostr(key));
+
+      int ret = t.put(entries);
+      assert(ret == 0);
     }
 
-    librados::ObjectWriteOperation op;
-    cls_tabular_put(op, entries);
-
-    int ret = ioctx.operate(objname, &op);
-    if (ret < 0)
-      fprintf(stderr, "ret=%d e=%s\n", ret, strerror(-ret));
-    assert(ret == 0);
   }
 
   ioctx.close();
