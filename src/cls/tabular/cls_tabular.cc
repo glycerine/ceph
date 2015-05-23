@@ -34,7 +34,8 @@ static inline int strtou64(string value, uint64_t *out)
 /*
  * It's hard to track how many rows we actually have because we can't
  * distinguish between writes to new rows and row updates. To simplify things
- * we assume that there aren't a significant number of updates.
+ * we assume that there aren't a significant number of updates. The key part
+ * here is that leveldb doesn't provide a "count" interface.
  *
  * upper and lower bound controlling which range of keys we are managing and
  * can recieve operations. boolean values can be used to indicate when the
@@ -125,9 +126,15 @@ static int write_header(cls_method_context_t hctx, cls_tabular_header& header)
   return 0;
 }
 
+/*
+ * This is how new entries are added to this object (partition).
+ */
 static int cls_tabular_put(cls_method_context_t hctx,
     bufferlist *in, bufferlist *out)
 {
+  /*
+   * Decode the input parameters for this operation.
+   */
   cls_tabular_put_op op;
   try {
     bufferlist::iterator iter = in->begin();
@@ -137,6 +144,9 @@ static int cls_tabular_put(cls_method_context_t hctx,
     return -EINVAL;
   }
 
+  /*
+   * Read the metadata for this object.
+   */
   cls_tabular_header header;
   int ret = read_header(hctx, header);
   if (ret < 0) {
@@ -144,22 +154,34 @@ static int cls_tabular_put(cls_method_context_t hctx,
     return ret;
   }
 
+  /*
+   * Entries is what is going to go into the key/value store. Effectively the
+   * set of entries we are going to accept. Currently we don't accept partial
+   * puts.
+   */
   map<string, bufferlist> entries;
+
+  // for each entry sent by the client
   for (vector<string>::iterator it = op.entries.begin(); it != op.entries.end(); it++) {
     std::string& key = *it;
 
+    // key/value pair with empty byte array
     entries[key] = bufferlist();
 
+    // convert str(key) back to numeric value
     uint64_t key_val;
     int ret = strtou64(*it, &key_val);
     if (ret < 0)
       return ret;
 
+    // if we are outside the bounds being accepted by this object's partition
+    // range then return -ERANGE.
     if (key_val < header.lower_bound || key_val > header.upper_bound) {
       CLS_ERR("ERROR: cls_tabular_put: out of range");
       return -ERANGE;
     }
 
+    // initialize 'seen' bounds
     if (header.total_entries == 0) {
       header.lower_bound_seen = key_val;
       header.upper_bound_seen = key_val;
@@ -168,21 +190,31 @@ static int cls_tabular_put(cls_method_context_t hctx,
     header.total_entries++;
     header.effective_entries++;
 
+    // update 'seen' bounds
     if (key_val < header.lower_bound_seen)
       header.lower_bound_seen = key_val;
     if (key_val > header.upper_bound_seen)
       header.upper_bound_seen = key_val;
   }
 
+  // insert the entries into our database. we know at this point that they are
+  // all valid for the range associated with this object.
   ret = cls_cxx_map_set_vals(hctx, &entries);
   if (ret < 0) {
     CLS_ERR("ERROR: cls_tabular_put: failed to write entries");
     return ret;
   }
 
+  // if the number of entries in the range that we are accepting exceeds 1000
+  // then we create a split.
+  // 
+  // We want to reject future writes by updating 'lower bound' and 'upper
+  // bound'. And also want to update the seen bounds for the new valid range.
+  //
+  // Insert split point into the object header metadata.
+  //
   if (header.effective_entries > 1000) {
-    uint64_t split_point = header.lower_bound_seen + ((header.upper_bound_seen -
-        header.lower_bound_seen) / 2);
+    uint64_t split_point = header.lower_bound_seen + ((header.upper_bound_seen -  header.lower_bound_seen) / 2);
     CLS_ERR("cls_tabular_put: split: entries %lu lower %lu upper %lu split %lu\n",
         header.effective_entries,
         header.lower_bound_seen,

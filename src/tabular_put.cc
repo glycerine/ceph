@@ -16,6 +16,13 @@
 #include "include/rados/librados.hpp"
 #include "cls/tabular/cls_tabular_client.h"
 
+/*
+ * This represents a partition of a table.
+ *
+ * oid:  name of the object holding the data for this partition.
+ *
+ * TODO: a table split needs to have a range.
+ */
 struct table_split {
   std::string oid;
 
@@ -33,6 +40,13 @@ struct table_split {
 };
 WRITE_CLASS_ENCODER(table_split)
 
+/*
+ * This represents the metadata for a table.
+ *
+ * seq:
+ * unique_id:
+ * splits:     this is the set of partitions of the table
+ */
 struct table_state {
   int seq;
   std::string unique_id;
@@ -56,6 +70,9 @@ struct table_state {
 };
 WRITE_CLASS_ENCODER(table_state)
 
+/*
+ * This client interface to the table.
+ */
 struct table {
   librados::IoCtx& ioctx;
   std::string head;
@@ -87,20 +104,29 @@ struct table {
     }
   }
 
+  /*
+   * Create new table instance. The "head" parameter is the name of the table
+   * (or more precisely the name of the object containing the metadata for the
+   * table).
+   */
   table(librados::IoCtx& ioctx, std::string head) :
     ioctx(ioctx), head(head) {
 
+      // read the metadata out of the head object
       bufferlist bl;
       int ret = ioctx.read(head, bl, 0, 0);
       assert(ret > 0);
 
+      // decode the table_state that was read.
       librados::bufferlist::iterator iter = bl.begin();
       ::decode(state, iter);
 
+      // debugging: print out splits
       for (unsigned i = 0; i < state.splits.size(); i++) {
         std::cout << "table " << head << ": split " << i << ": " << state.splits[i].oid << std::endl;
       }
 
+      // ???
       watch = new std::thread(&table::watch_func, *this);
   }
 
@@ -110,10 +136,21 @@ struct table {
     return put(entries);
   }
 
+  /*
+   * put a set of entries into object
+   */
   int put(std::vector<std::string>& entries) {
     librados::ObjectWriteOperation op;
     cls_tabular_put(op, entries);
 
+    /*
+     * Issue the "put" command on the "head" object.
+     *
+     * TODO: consult the table_state to figure out which object is responsible
+     * for the range that contains the key of the entry. Note that we might
+     * need to call this multiple times if the set of entries contains keys
+     * that need to be sent to different partitions.
+     */
     int ret = ioctx.operate(head, &op);
     if (ret < 0)
       fprintf(stderr, "ret=%d e=%s\n", ret, strerror(-ret));
@@ -189,25 +226,53 @@ int main(int argc, char **argv)
   librados::IoCtx ioctx;
   open_ioctx(pool, rados, ioctx);
 
+  /*
+   * Create a new "table" when the user provides the "-c" option.
+   */
   if (create) {
     boost::uuids::uuid uuid = boost::uuids::random_generator()();
     std::stringstream uuid_ss;
     uuid_ss << uuid;
 
+    /*
+     * The object name is provided by the user with the "-o" option. This will
+     * remove any object with the provided name, and then create a empty
+     * object with the same name.
+     */
     ioctx.remove(objname);
     ioctx.create(objname, true);
 
+    /*
+     * Construct the metadata that describes the table as it is stored within
+     * RADOS. The table state holds the set of splits, but since this is the
+     * very first instance of this metadata for this table it will just be in
+     * an initialized state.
+     */
     table_state s;
     s.seq = 0;
     s.unique_id = uuid_ss.str();
 
+    /*
+     * Create the first partition which will have -inf,+inf. We will name the
+     * object holding the first parition with a random string, but we will
+     * keep track of all these names in our metadata.
+     */
+
+    // first we create the name
     uuid = boost::uuids::random_generator()();
     uuid_ss.str("");
     uuid_ss << s.unique_id << "." << uuid;
+
+    // create the split
+    // TODO: range is -inf,+inf
     table_split split;
     split.oid = uuid_ss.str();
+
+    // add the split to the table
     s.splits.push_back(split);
 
+    // write the metadata (table state) into the object that represents the
+    // table (i.e. inode).
     bufferlist bl;
     ::encode(s, bl);
     int ret = ioctx.write_full(objname, bl);
@@ -216,21 +281,37 @@ int main(int argc, char **argv)
     return 0;
   }
 
+  /*
+   * We'll be inserting key/value pairs that are (int, bytes). And we'll use a
+   * uniform random distribution for the key.
+   */
   std::default_random_engine generator;
   std::uniform_int_distribution<uint64_t> distribution(0, 1ULL<<32);
 
+  /*
+   * This represents the client's view of the table and provides the interface
+   * to interact with the table.
+   */
   table t(ioctx, objname);
 
+  /*
+   * Generate load on the table by inserting key/value pairs.
+   *
+   * TODO: notice that we are adding just the keys. This is fine for now, but
+   * later we'll want to have a byte array follow around the keys as a value
+   * in a key/value pair.
+   */
   while (1) {
+    // create an empty "batch" of things to insert into the table.
     std::vector<std::string> entries;
-    for (unsigned i = 0; i < 1; i++) {
-      uint64_t key = distribution(generator);
-      entries.push_back(u64tostr(key));
 
-      int ret = t.put(entries);
-      assert(ret == 0);
-    }
+    // add an entry to the batch
+    uint64_t key = distribution(generator);
+    entries.push_back(u64tostr(key));
 
+    // add the batch to the table
+    int ret = t.put(entries);
+    assert(ret == 0);
   }
 
   ioctx.close();
