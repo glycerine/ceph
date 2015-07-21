@@ -65,7 +65,7 @@ namespace cls_lua_client {
      * -ENOTSUPP if a handler isn't found. In the later case we still get a
      * valid reply, in the former not so much.
      */
-    ret = ioctx.exec(oid, "lua", "eval", inbl, output);
+    ret = ioctx.exec(oid, "lua", "eval_msgpack", inbl, output);
 
     return ret;
   }

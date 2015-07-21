@@ -8,13 +8,15 @@
 #include <lua.hpp>
 #include "include/types.h"
 #include "objclass/objclass.h"
+#include "json_spirit/json_spirit.h"
 #include "cls/lua/cls_lua.h"
 
 CLS_VER(1,0)
 CLS_NAME(lua)
 
 cls_handle_t h_class;
-cls_method_handle_t h_eval;
+cls_method_handle_t h_eval_msgpack;
+cls_method_handle_t h_eval_json;
 
 /*
  * Jump point for recovering from Lua panic.
@@ -36,9 +38,18 @@ struct clslua_err {
   int ret;
 };
 
+/*
+ * Input parameter encoding.
+ */
+enum InputEncoding {
+  MSGPACK_ENC,
+  JSON_ENC,
+};
+
 struct clslua_hctx {
   struct clslua_err error;
   bufferlist *inbl;
+  InputEncoding in_enc;
   bufferlist *outbl;
   cls_method_context_t *hctx;
   int ret;
@@ -533,26 +544,108 @@ static int clslua_eval(lua_State *L)
    * Deserialize the input that contains the script, the name of the handler
    * to call, and the handler input.
    */
-  lua_getglobal(L, "cmsgpack");
-  lua_getfield(L, -1, "unpack");
-  lua_pushlstring(L, ctx->inbl->c_str(), ctx->inbl->length());
-  lua_call(L, 1, 1); /* puts the unpacked array on the stack */
+  std::string script;
+  std::string funcname;
+  std::string input;
+  size_t input_len = 0;
 
-  /* submitted lua script */
-  lua_pushinteger(L, 1);
-  lua_gettable(L, -2);
-  const char *script = lua_tolstring(L, -1, NULL);
+  if (ctx->in_enc == MSGPACK_ENC) {
 
-  /* name of handler function */
-  lua_pushinteger(L, 2);
-  lua_gettable(L, -3);
-  const char *funcname = lua_tolstring(L, -1, NULL);
+    lua_getglobal(L, "cmsgpack");
+    lua_getfield(L, -1, "unpack");
+    lua_pushlstring(L, ctx->inbl->c_str(), ctx->inbl->length());
+    lua_call(L, 1, 1); /* puts the unpacked array on the stack */
 
-  /* handler input */
-  lua_pushinteger(L, 3);
-  lua_gettable(L, -4);
-  size_t input_len;
-  const char *input = lua_tolstring(L, -1, &input_len);
+    /* submitted lua script */
+    lua_pushinteger(L, 1);
+    lua_gettable(L, -2);
+    script = std::string(lua_tolstring(L, -1, NULL));
+
+    /* name of handler function */
+    lua_pushinteger(L, 2);
+    lua_gettable(L, -3);
+    funcname = std::string(lua_tolstring(L, -1, NULL));
+
+    /* handler input */
+    lua_pushinteger(L, 3);
+    lua_gettable(L, -4);
+    const char *inputp = lua_tolstring(L, -1, &input_len);
+    input = std::string(inputp, input_len);
+
+  } else if (ctx->in_enc == JSON_ENC) {
+
+    std::string json_input(ctx->inbl->c_str());
+    json_spirit::mValue value;
+
+    if (!json_spirit::read(json_input, value)) {
+      CLS_ERR("error: unparseable JSON");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+
+    /*
+     * Schema:
+     * {
+     *   "script": "...",
+     *   "handler": "...",
+     *   "input": "..." # optional
+     * }
+     */
+    if (value.type() != json_spirit::obj_type) {
+      CLS_ERR("error: input not a JSON object");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+    json_spirit::mObject obj = value.get_obj();
+
+    // grab the script
+    std::map<std::string, json_spirit::mValue>::const_iterator it = obj.find("script");
+    if (it == obj.end()) {
+      CLS_ERR("error: 'script' field found in JSON object");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+
+    if (it->second.type() != json_spirit::str_type) {
+      CLS_ERR("error: script is not a string");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+    script = it->second.get_str();
+
+    // grab the target function/handler name
+    it = obj.find("handler");
+    if (it == obj.end()) {
+      CLS_ERR("error: no target handler found in JSON object");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+
+    if (it->second.type() != json_spirit::str_type) {
+      CLS_ERR("error: target handler is not a string");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+    funcname = it->second.get_str();
+
+    // grab the input (optional)
+    it = obj.find("input");
+    if (it != obj.end()) {
+      if (it->second.type() != json_spirit::str_type) {
+        CLS_ERR("error: handler input is not a string");
+        ctx->ret = -EINVAL;
+        return 0;
+      }
+      input = it->second.get_str();
+      input_len = input.size();
+    }
+
+  } else {
+    CLS_ERR("error: unknown encoding type");
+    ctx->ret = -EFAULT;
+    assert(0);
+    return 0;
+  }
 
   /*
    * Create table to hold registered (valid) handlers.
@@ -566,22 +659,22 @@ static int clslua_eval(lua_State *L)
   lua_settable(L, LUA_REGISTRYINDEX);
 
   /* load and compile chunk */
-  if (luaL_loadstring(L, script))
+  if (luaL_loadstring(L, script.c_str()))
     return lua_error(L);
 
   /* execute chunk */
   lua_call(L, 0, 0);
 
   /* no error, but nothing left to do */
-  if (!strlen(funcname)) {
+  if (!funcname.size()) {
     CLS_LOG(10, "no handler name provided");
     ctx->ret = 0; /* success */
     return 0;
   }
 
-  lua_getglobal(L, funcname);
+  lua_getglobal(L, funcname.c_str());
   if (lua_type(L, -1) != LUA_TFUNCTION) {
-    CLS_ERR("error: unknown handler or not function: %s", funcname);
+    CLS_ERR("error: unknown handler or not function: %s", funcname.c_str());
     ctx->ret = -EOPNOTSUPP;
     return 0;
   }
@@ -590,7 +683,7 @@ static int clslua_eval(lua_State *L)
   clslua_check_registered_handler(L);
 
   /* setup the input/output bufferlists */
-  bufferptr inbp(input, input_len);
+  bufferptr inbp(input.c_str(), input_len);
   bufferlist inbl;
   inbl.push_back(inbp);
   clslua_pushbufferlist(L, &inbl);
@@ -615,7 +708,8 @@ static int clslua_eval(lua_State *L)
 /*
  * Main handler. Proxies the Lua VM and the Lua-defined handler.
  */
-static int eval(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+static int eval_generic(cls_method_context_t hctx, bufferlist *in, bufferlist *out,
+    InputEncoding in_enc)
 {
   struct clslua_hctx ctx;
   lua_State *L = NULL;
@@ -624,6 +718,7 @@ static int eval(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   /* stash context for use in Lua VM */
   ctx.hctx = &hctx;
   ctx.inbl = in;
+  ctx.in_enc = in_enc;
   ctx.outbl = out;
   ctx.error.error = false;
 
@@ -693,12 +788,25 @@ out:
   return ret;
 }
 
+static int eval_msgpack(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  return eval_generic(hctx, in, out, MSGPACK_ENC);
+}
+
+static int eval_json(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  return eval_generic(hctx, in, out, JSON_ENC);
+}
+
 void __cls_init()
 {
   CLS_LOG(20, "Loaded lua class!");
 
   cls_register("lua", &h_class);
 
-  cls_register_cxx_method(h_class, "eval",
-      CLS_METHOD_RD | CLS_METHOD_WR, eval, &h_eval);
+  cls_register_cxx_method(h_class, "eval_msgpack",
+      CLS_METHOD_RD | CLS_METHOD_WR, eval_msgpack, &h_eval_msgpack);
+
+  cls_register_cxx_method(h_class, "eval_json",
+      CLS_METHOD_RD | CLS_METHOD_WR, eval_json, &h_eval_json);
 }
