@@ -4857,6 +4857,8 @@ int OSDMonitor::prepare_command_pool_set(map<string,cmd_vartype> &cmdmap,
       ss << "expecting value 'true', 'false', '0', or '1'";
       return -EINVAL;
     }
+  } else if (var == "lua_class") {
+    p.lua_class = val;
   } else {
     ss << "unrecognized variable '" << var << "'";
     return -EINVAL;

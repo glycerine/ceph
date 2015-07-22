@@ -3639,11 +3639,29 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	assert(result == 0);   // init_op_flags() already verified this works.
 
 	ClassHandler::ClassMethod *method = cls->get_method(mname.c_str());
-	if (!method) {
-	  dout(10) << "call method " << cname << "." << mname << " does not exist" << dendl;
-	  result = -EOPNOTSUPP;
-	  break;
-	}
+        if (!method) {
+          /*
+           * If the named method doesn't exist in the Lua object class then we
+           * are going to patch the call and inject the Lua script from the
+           * OSD map, virtual method name, and original input.
+           */
+          if (cname == "lua") {
+            string real_mname = "eval_bufferlist";
+            method = cls->get_method(real_mname.c_str());
+            if (method) {
+              bufferlist patched_indata;
+              ::encode(pool.info.lua_class, patched_indata);
+              ::encode(mname, patched_indata);
+              ::encode(indata, patched_indata);
+              indata = patched_indata;
+            }
+          }
+          if (!method) {
+            dout(10) << "call method " << cname << "." << mname << " does not exist" << dendl;
+            result = -EOPNOTSUPP;
+            break;
+          }
+        }
 
 	int flags = method->get_flags();
 	if (flags & CLS_METHOD_WR)

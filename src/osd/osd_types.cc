@@ -1254,7 +1254,7 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
     return;
   }
 
-  ENCODE_START(19, 5, bl);
+  ENCODE_START(20, 5, bl);
   ::encode(type, bl);
   ::encode(size, bl);
   ::encode(crush_ruleset, bl);
@@ -1297,12 +1297,13 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
   ::encode(min_read_recency_for_promote, bl);
   ::encode(expected_num_objects, bl);
   ::encode(cache_target_dirty_high_ratio_micro, bl);
+  ::encode(lua_class, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_pool_t::decode(bufferlist::iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(19, 5, 5, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(20, 5, 5, bl);
   ::decode(type, bl);
   ::decode(size, bl);
   ::decode(crush_ruleset, bl);
@@ -1418,6 +1419,9 @@ void pg_pool_t::decode(bufferlist::iterator& bl)
     ::decode(cache_target_dirty_high_ratio_micro, bl);
   } else {
     cache_target_dirty_high_ratio_micro = cache_target_dirty_ratio_micro;
+  }
+  if (struct_v >= 20) {
+    ::decode(lua_class, bl);
   }
   DECODE_FINISH(bl);
   calc_pg_masks();

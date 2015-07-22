@@ -8602,13 +8602,25 @@ int OSD::init_op_flags(OpRequestRef& op)
 	  return r;
 	}
 	int flags = cls->get_method_flags(mname.c_str());
-	if (flags < 0) {
-	  if (flags == -ENOENT)
-	    r = -EOPNOTSUPP;
-	  else
-	    r = flags;
-	  return r;
-	}
+        if (flags < 0) {
+          /*
+           * If the target class is cls_lua then we will allow a missing
+           * method name to pass through and be resolved within the object
+           * class (i.e. late binding methods). We currently don't have enough
+           * information to fill in flags accurately so we just mark it as
+           * RDWR. Note that this is could be generalized more by adding
+           * first-class support for object class handling of missing methods.
+           */
+          if (flags == -ENOENT && cname == "lua")
+            flags = CLS_METHOD_RD | CLS_METHOD_WR;
+          else {
+            if (flags == -ENOENT)
+              r = -EOPNOTSUPP;
+            else
+              r = flags;
+            return r;
+          }
+        }
 	is_read = flags & CLS_METHOD_RD;
 	is_write = flags & CLS_METHOD_WR;
 
