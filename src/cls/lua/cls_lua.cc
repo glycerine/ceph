@@ -17,6 +17,7 @@ CLS_NAME(lua)
 cls_handle_t h_class;
 cls_method_handle_t h_eval_msgpack;
 cls_method_handle_t h_eval_json;
+cls_method_handle_t h_eval_bufferlist;
 
 /*
  * Jump point for recovering from Lua panic.
@@ -44,6 +45,7 @@ struct clslua_err {
 enum InputEncoding {
   MSGPACK_ENC,
   JSON_ENC,
+  BUFFERLIST_ENC,
 };
 
 struct clslua_hctx {
@@ -640,6 +642,20 @@ static int clslua_eval(lua_State *L)
       input_len = input.size();
     }
 
+  } else if (ctx->in_enc == BUFFERLIST_ENC) {
+
+    try {
+      bufferlist::iterator it = ctx->inbl->begin();
+      ::decode(script, it);
+      ::decode(funcname, it);
+      ::decode(input, it);
+      input_len = input.size();
+    } catch (const buffer::error &err) {
+      CLS_ERR("error: could not decode ceph encoded input");
+      ctx->ret = -EINVAL;
+      return 0;
+    }
+
   } else {
     CLS_ERR("error: unknown encoding type");
     ctx->ret = -EFAULT;
@@ -798,6 +814,11 @@ static int eval_json(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   return eval_generic(hctx, in, out, JSON_ENC);
 }
 
+static int eval_bufferlist(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  return eval_generic(hctx, in, out, BUFFERLIST_ENC);
+}
+
 void __cls_init()
 {
   CLS_LOG(20, "Loaded lua class!");
@@ -809,4 +830,7 @@ void __cls_init()
 
   cls_register_cxx_method(h_class, "eval_json",
       CLS_METHOD_RD | CLS_METHOD_WR, eval_json, &h_eval_json);
+
+  cls_register_cxx_method(h_class, "eval_bufferlist",
+      CLS_METHOD_RD | CLS_METHOD_WR, eval_bufferlist, &h_eval_bufferlist);
 }
