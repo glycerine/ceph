@@ -1079,6 +1079,9 @@ namespace librados
     int64_t pool_lookup(const char *name);
     int pool_reverse_lookup(int64_t id, std::string *name);
 
+    int num_osds();
+    int primary_osd(const char *pool_name, const char *key);
+
     uint64_t get_instance_id();
 
     int mon_command(std::string cmd, const bufferlist& inbl,

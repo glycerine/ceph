@@ -113,6 +113,9 @@ public:
   int pool_get_base_tier(int64_t pool_id, int64_t* base_tier);
   int pool_delete(const char *name);
 
+  int num_osds();
+  int primary_osd(const char *pool_name, const char *key);
+
   int pool_delete_async(const char *name, PoolAsyncCompletionImpl *c);
 
   int blacklist_add(const string& client_address, uint32_t expire_seconds);

@@ -644,6 +644,49 @@ int librados::RadosClient::pool_delete(const char *name)
   return ret;
 }
 
+int librados::RadosClient::num_osds()
+{
+  int r = wait_for_osdmap();
+  if (r < 0) {
+    objecter->put_osdmap_read();
+    return r;
+  }
+
+  const OSDMap *osdmap = objecter->get_osdmap_read();
+
+  r = osdmap->get_num_osds();
+  objecter->put_osdmap_read();
+  return r;
+}
+
+int librados::RadosClient::primary_osd(const char *pool_name, const char *key)
+{
+  int r = wait_for_osdmap();
+  if (r < 0) {
+    objecter->put_osdmap_read();
+    return r;
+  }
+
+  const OSDMap *osdmap = objecter->get_osdmap_read();
+
+  int64_t pool = osdmap->lookup_pg_pool_name(pool_name);
+  if (pool < 0) {
+    objecter->put_osdmap_read();
+    return -ENOENT;
+  }
+
+  object_locator_t oloc(pool);
+  object_t oid(key);
+  pg_t pgid = osdmap->object_locator_to_pg(oid, oloc);
+  pg_t mpgid = osdmap->raw_pg_to_pg(pgid);
+  vector<int> up, acting;
+  int up_p, acting_p;
+  osdmap->pg_to_up_acting_osds(mpgid, &up, &up_p, &acting, &acting_p);
+  assert(acting.size());
+  objecter->put_osdmap_read();
+  return acting_p;
+}
+
 int librados::RadosClient::pool_delete_async(const char *name, PoolAsyncCompletionImpl *c)
 {
   int r = wait_for_osdmap();

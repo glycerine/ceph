@@ -9,6 +9,7 @@
 #include "include/types.h"
 #include "objclass/objclass.h"
 #include "json_spirit/json_spirit.h"
+#include "common/Clock.h"
 #include "cls/lua/cls_lua.h"
 
 CLS_VER(1,0)
@@ -383,6 +384,16 @@ static int clslua_map_clear(lua_State *L)
 }
 
 /*
+ * ceph_clock_now
+ */
+static int clslua_clock(lua_State *L)
+{
+  double time = (double)ceph_clock_now(NULL);
+  lua_pushnumber(L, time);
+  return 1;
+}
+
+/*
  * Functions registered in the 'cls' module.
  */
 static const luaL_Reg clslua_lib[] = {
@@ -398,6 +409,7 @@ static const luaL_Reg clslua_lib[] = {
   {"map_set_val", clslua_map_set_val},
   {"getxattr", clslua_getxattr},
   {"setxattr", clslua_setxattr},
+  {"clock", clslua_clock},
   {NULL, NULL}
 };
 

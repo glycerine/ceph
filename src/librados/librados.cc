@@ -1984,6 +1984,16 @@ int librados::Rados::pool_get_base_tier(int64_t pool_id, int64_t* base_tier)
   return retval;
 }
 
+int librados::Rados::primary_osd(const char *pool_name, const char *key)
+{
+  return client->primary_osd(pool_name, key);
+}
+
+int librados::Rados::num_osds()
+{
+  return client->num_osds();
+}
+
 int librados::Rados::pool_delete(const char *name)
 {
   return client->pool_delete(name);

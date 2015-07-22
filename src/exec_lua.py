@@ -41,25 +41,5 @@ rados = Rados(conffile='', rados_id='admin')
 rados.connect()
 ioctx = rados.open_ioctx("rbd")
 
-script = """
-function run(input, output)
-  output:append('{ret}' .. ',' .. cls.clock())
-end
-cls.register(run)
-"""
-
-cmd = {
-    "prefix" : "osd pool set",
-    "pool" : "rbd",
-    "var": "lua_class",
-}
-
-
-counter = 0
 while True:
-    cmd.update({"val": script.format(ret = counter)})
-    print json.dumps(cmd)
-    ret, buf, errs = rados.mon_command(json.dumps(cmd), '', timeout=30)
-    print ret, buf, errs, counter
-    counter += 1
-    break
+    print ioctx.execute("asdf", "lua", "run", "asdf")
