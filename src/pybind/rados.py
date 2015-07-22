@@ -1533,6 +1533,37 @@ returned %d, but should return zero on success." % (self.name, ret))
             raise make_ex(ret, "Ioctx.read(%s): failed to read %s" % (self.name, key))
         return ctypes.string_at(ret_buf, ret)
 
+    @requires(('key', str), ('cls', str), ('method', str), ('data', str))
+    def execute(self, key, cls, method, data, length=8192):
+        """
+        Execute an OSD class method on an object.
+
+        :param key: name of the object
+        :type key: str
+        :param cls: name of the object class
+        :type cls: str
+        :param method: name of the method
+        :type method: str
+        :param data: input data
+        :type data: str
+        :param length: size of output buffer in bytes (default=8291)
+        :type length: int
+
+        :raises: :class:`TypeError`
+        :raises: :class:`Error`
+        :returns: str - method output
+        """
+        self.require_ioctx_open()
+        ret_buf = create_string_buffer(length)
+        ret = run_in_thread(self.librados.rados_exec,
+                (self.io, c_char_p(key), c_char_p(cls), c_char_p(method),
+                    c_char_p(data), c_size_t(len(data)), ret_buf,
+                    c_size_t(length)))
+        if ret < 0:
+            raise make_ex(ret, "Ioctx.exec(%s): failed to exec %s:%s on %s" %
+                    (self.name, cls, method, key))
+        return ctypes.string_at(ret_buf, ret)
+
     def get_stats(self):
         """
         Get pool usage statistics
