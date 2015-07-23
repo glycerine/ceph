@@ -22,46 +22,62 @@ static std::string cmd(int seq, std::string pool)
          std::string("\"pool\": \"" + pool + "\"}");
 }
 
-static boost::condition_variable next_seq_cond;
-
 static boost::mutex load_lock;
 static boost::condition_variable load_cond;
-// delays[sequence][osd] = min delay observed
-static std::map<int, std::map<std::string, double> > delays;
-static std::map<std::string, int> outstanding_ios;
+static boost::condition_variable next_seq_cond;
+
+/*
+ * outstanding_ios[idx] = outstanding ios for idx
+ * objnames[idx] = objname for idx
+ * delays[seq][idx] = min delay for seq for idx
+ */
+static int num_osds;
+static std::vector<int> outstanding_ios;
+static std::vector<std::string> objnames;
+static std::map<int, std::map<int, double> > delays;
 
 struct ExecCompletion {
   librados::AioCompletion *c;
   ceph::bufferlist outbl;
-  std::string objname;
+  int idx;
 };
 
 static void exec_safe_cb(librados::completion_t cb, void *arg)
 {
-  boost::unique_lock<boost::mutex> l(load_lock);
   ExecCompletion *c = (ExecCompletion*)arg;
   int rv = c->c->get_return_value();
-  (void)rv;
-
-  outstanding_ios[c->objname]--;
-  assert(outstanding_ios[c->objname] >= 0);
+  assert(rv == 0);
 
   std::string result(c->outbl.c_str(), c->outbl.length());
-
   size_t split = result.find(",");
-  std::string seqstr = result.substr(0, split);
-  std::string timestr = result.substr(split+1);
+  int seq = boost::lexical_cast<int>(result.substr(0, split));
+  double time = boost::lexical_cast<double>(result.substr(split+1));
 
-  int seq = boost::lexical_cast<int>(seqstr);
-  double time = boost::lexical_cast<double>(timestr);
+  boost::unique_lock<boost::mutex> l(load_lock);
 
-  std::cout << std::string(c->outbl.c_str(), c->outbl.length()) << std::endl;
-  std::cout << seq << "," << time << std::endl;
+  assert(--outstanding_ios[c->idx] >= 0);
 
-  delays[seq][c->objname] = time;
+  std::map<int, std::map<int, double> >::iterator it = delays.find(seq);
+  if (it == delays.end()) {
+    delays[seq][c->idx] = time;
+    it = delays.find(seq);
+    assert(it != delays.end());
+  } else {
+    std::map<int, double>::iterator it2 = it->second.find(c->idx);
+    if (it2 == it->second.end())
+      it->second[c->idx] = time;
+    else
+      it2->second = std::min(time, it2->second);
+  }
+
+  std::cout << seq << " " << time << std::endl;
 
   c->c->release();
   delete c;
+
+  // only notify once per seq?
+  if (it->second.size() == num_osds)
+    next_seq_cond.notify_one();
 
   load_cond.notify_one();
 }
@@ -70,31 +86,30 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
     const std::map<int, std::string>& covering_set, int queue_depth)
 {
   assert(queue_depth > 0);
-  assert(covering_set.size() > 0);
 
-
-  // init outstanding_ios
   for (std::map<int, std::string>::const_iterator it = covering_set.begin();
-       it != covering_set.end(); it++) {
-    outstanding_ios[it->second] = 0;
+      it != covering_set.end(); it++) {
+    objnames.push_back(it->second);
+    outstanding_ios.push_back(0);
   }
+  assert(objnames.size() == num_osds);
+  assert(outstanding_ios.size() == num_osds);
 
   boost::unique_lock<boost::mutex> l(load_lock);
 
   for (;;) {
-    for (std::map<std::string, int>::iterator it = outstanding_ios.begin();
-        it != outstanding_ios.end(); it++) {
-      while (it->second < queue_depth) {
+    for (int i = 0; i < num_osds; i++) {
+      while (outstanding_ios[i] < queue_depth) {
         ExecCompletion *c = new ExecCompletion;
-        c->objname = it->first;
+        c->idx = i;
         c->c = cluster->aio_create_completion(c, NULL, exec_safe_cb);
         assert(c->c);
 
         ceph::bufferlist inbl;
-        int ret = ioctx.aio_exec(it->first, c->c, "lua", "run", inbl, &c->outbl);
+        int ret = ioctx.aio_exec(objnames[i], c->c, "lua", "run", inbl, &c->outbl);
         assert(ret == 0);
 
-        it->second++;
+        outstanding_ios[i]++;
       }
     }
     load_cond.wait(l);
@@ -132,7 +147,7 @@ int main(int argc, char **argv)
   /*
    * Compute covering set of objects
    */
-  int num_osds = cluster.num_osds();
+  num_osds = cluster.num_osds();
   assert(num_osds > 0);
 
   int counter = 0;
@@ -164,15 +179,21 @@ int main(int argc, char **argv)
   }
 #endif
 
-  ceph::bufferlist inbl, outbl;
-  std::string outstring;
-  int seq = 3333;
-  ret = cluster.mon_command(cmd(seq, pool), inbl, &outbl, &outstring);
-  assert(ret == 0);
+  cout.precision(dbl::digits10);
 
   boost::thread thread(load_thread_func, &cluster, ioctx, covering_set, queue_depth);
 
-  cout.precision(dbl::digits10);
+  for (int seq = 0; 1; seq++) {
+    {
+      boost::unique_lock<boost::mutex> l(load_lock);
+      next_seq_cond.wait(l);
+    }
+
+    ceph::bufferlist inbl, outbl;
+    std::string outstring;
+    ret = cluster.mon_command(cmd(seq, pool), inbl, &outbl, &outstring);
+    assert(ret == 0);
+  }
 
   thread.join();
 
