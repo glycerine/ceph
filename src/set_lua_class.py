@@ -43,9 +43,9 @@ ioctx = rados.open_ioctx("rbd")
 
 script = """
 function run(input, output)
-  output:append('{ret}' .. ',' .. cls.clock())
-end
-cls.register(run)
+    output:append('{ret}' .. ',' .. cls.clock());
+end;
+cls.register(run);
 """
 
 cmd = {

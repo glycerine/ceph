@@ -4859,6 +4859,7 @@ int OSDMonitor::prepare_command_pool_set(map<string,cmd_vartype> &cmdmap,
     }
   } else if (var == "lua_class") {
     p.lua_class = val;
+    val = "<lua script trimmed>";
   } else {
     ss << "unrecognized variable '" << var << "'";
     return -EINVAL;
@@ -6546,12 +6547,14 @@ done:
     return true;
 
   } else if (prefix == "osd pool set") {
+    utime_t before_proposal = ceph_clock_now(NULL);
     err = prepare_command_pool_set(cmdmap, ss);
     if (err == -EAGAIN)
       goto wait;
     if (err < 0)
       goto reply;
 
+    ss << " before_prop=" << before_proposal.to_nsec();
     getline(ss, rs);
     wait_for_finished_proposal(op, new Monitor::C_Command(mon, op, 0, rs,
 						   get_last_committed() + 1));

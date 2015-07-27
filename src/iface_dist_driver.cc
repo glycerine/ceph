@@ -23,8 +23,10 @@ static std::string cmd(int seq, std::string pool)
 }
 
 static boost::mutex load_lock;
-static boost::condition_variable load_cond;
-static boost::condition_variable next_seq_cond;
+static boost::condition_variable load_cond; // fill aio queue
+static boost::condition_variable next_seq_cond; // generate new seq
+static int curr_seq;
+static boost::condition_variable load_thread_started; // load thread started
 
 /*
  * outstanding_ios[idx] = outstanding ios for idx
@@ -70,14 +72,17 @@ static void exec_safe_cb(librados::completion_t cb, void *arg)
       it2->second = std::min(time, it2->second);
   }
 
-  std::cout << seq << " " << time << std::endl;
+  //std::cout << seq << " " << time << std::endl;
 
   c->c->release();
   delete c;
 
-  // only notify once per seq?
-  if (it->second.size() == num_osds)
+  // wait for 2-3 responses for each osd?
+  it = delays.find(curr_seq);
+  if (it != delays.end() && it->second.size() == num_osds) {
+    //std::cout << "notifying complete for seq: " << curr_seq << std::endl;
     next_seq_cond.notify_one();
+  }
 
   load_cond.notify_one();
 }
@@ -96,6 +101,7 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
   assert(outstanding_ios.size() == num_osds);
 
   boost::unique_lock<boost::mutex> l(load_lock);
+  load_thread_started.notify_one();
 
   for (;;) {
     for (int i = 0; i < num_osds; i++) {
@@ -113,6 +119,43 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
       }
     }
     load_cond.wait(l);
+  }
+}
+
+/*
+ * Make sure an initial script is installed on each OSD
+ */
+static void prime_osds(librados::Rados& cluster, librados::IoCtx& ioctx,
+    const std::map<int, std::string>& covering_set, int seq, std::string pool)
+{
+  ceph::bufferlist inbl, outbl;
+  std::string outstring;
+  int ret = cluster.mon_command(cmd(seq, pool), inbl, &outbl, &outstring);
+  assert(ret == 0);
+
+  std::vector<std::string> objnames;
+  for (std::map<int, std::string>::const_iterator it = covering_set.begin();
+      it != covering_set.end(); it++) {
+    objnames.push_back(it->second);
+  }
+
+  // loop until the script is installed
+  while (1) {
+    if (objnames.empty())
+      break;
+
+    std::random_shuffle(objnames.begin(), objnames.end());
+    std::string objname = objnames.back();
+
+    ceph::bufferlist inbl, outbl;
+    int ret = ioctx.exec(objname, "lua", "run", inbl, outbl);
+    if (ret < 0) {
+      if (ret == -EOPNOTSUPP) {
+        continue;
+      } else
+        assert(0);
+    }
+    objnames.pop_back();
   }
 }
 
@@ -147,8 +190,11 @@ int main(int argc, char **argv)
   /*
    * Compute covering set of objects
    */
-  num_osds = cluster.num_osds();
-  assert(num_osds > 0);
+  {
+    boost::unique_lock<boost::mutex> l(load_lock);
+    num_osds = cluster.num_osds();
+    assert(num_osds > 0);
+  }
 
   int counter = 0;
   std::map<int, std::string> covering_set;
@@ -181,18 +227,83 @@ int main(int argc, char **argv)
 
   cout.precision(dbl::digits10);
 
-  boost::thread thread(load_thread_func, &cluster, ioctx, covering_set, queue_depth);
+  /*
+   * Ensure that a script is initially installed on all osds so that we don't
+   * need a special case for dealing with errors during start-up.
+   */
+  const int initial_seq = 0;
+  curr_seq = -1;
+  prime_osds(cluster, ioctx, covering_set, initial_seq, pool);
 
-  for (int seq = 0; 1; seq++) {
+  /*
+   * Start the load generator
+   */
+  boost::thread thread;
+  {
+    boost::unique_lock<boost::mutex> l(load_lock);
+    thread = boost::thread(load_thread_func, &cluster, ioctx, covering_set, queue_depth);
+    load_thread_started.wait(l);
+  }
+
+  /*
+   * Generate new sequences in lock step.
+   */
+  for (int seq = initial_seq+1; 1; seq++) {
     {
       boost::unique_lock<boost::mutex> l(load_lock);
-      next_seq_cond.wait(l);
+      curr_seq = seq;
     }
 
+    // setup script for @seq number
+    //std::cout << "installed new seq: " << seq << std::endl;
     ceph::bufferlist inbl, outbl;
     std::string outstring;
     ret = cluster.mon_command(cmd(seq, pool), inbl, &outbl, &outstring);
     assert(ret == 0);
+
+    size_t pos1 = outstring.find("before_prop=");
+    size_t pos2 = outstring.find("after_prop=");
+    uint64_t before_prop = boost::lexical_cast<uint64_t>(outstring.substr(pos1+12, pos2-(pos1+13)));
+    uint64_t after_prop = boost::lexical_cast<uint64_t>(outstring.substr(pos2+11));
+
+    // this races with notify_one in the callback, but it is safe because once
+    // the current sequence is complete the callback will continue to issue
+    // notifies until the sequence number is changed.
+    std::vector<double> seq_delays;
+    {
+      boost::unique_lock<boost::mutex> l(load_lock);
+      //std::cout << "waiting on seq: " << seq << std::endl;
+      next_seq_cond.wait(l);
+
+      // grab a copy of the delays for this sequence
+      std::map<int, std::map<int, double> >::const_iterator it = delays.find(seq);
+      assert(it != delays.end());
+      assert(it->second.size() == num_osds);
+      for (std::map<int, double>::const_iterator it2 = it->second.begin();
+           it2 != it->second.end(); it2++) {
+        seq_delays.push_back(it2->second);
+      }
+    }
+
+    // we now have a timestamp for every osd. we can compute the time delays
+    // and then install a new sequence number
+    double min, max, sum = 0.0;
+    assert(seq_delays.size() == num_osds);
+    for (unsigned i = 0; i < seq_delays.size(); i++) {
+      double val = seq_delays[i];
+      if (i == 0) {
+        min = val;
+        max = val;
+      }
+      min = std::min(min, val);
+      max = std::max(max, val);
+      sum += val;
+    }
+    double avg = sum / (double)seq_delays.size();
+    std::cout << seq << " " << 
+      ((double)before_prop / (double)1000000000.0L) << " " <<
+      ((double)after_prop / (double)1000000000.0L) << " " <<
+      min << " " << max << " " << avg << std::endl;
   }
 
   thread.join();
@@ -200,48 +311,4 @@ int main(int argc, char **argv)
   ioctx.close();
   cluster.shutdown();
   return 0;
-
-#if 0
-  /*
-   * Use num_osds and primary_osd above to compute a set of object names that
-   * map to a minimal covering set of the osds.
-   *
-   * Create a thread that keeps multiple outstanding operations on each of the
-   * objects in the covering set computed above. We want multiple per so that
-   * we minimize the delay between a change to the lua interface and a new
-   * request that notices the change.
-   *
-   * we keep a mapping between sequence number of the smallest delay for each
-   * OSD. this is constantly updated by the outstanding requests as they
-   * complete.
-   *
-   * each time a new sequence number is generated and lua script is installed
-   * we block until we've got a delay reading for each osd. then run another
-   * experiment. how long should we wait to make sure we have the minimal
-   * value for each osd? we _probably_ only need on reading reasoning that
-   * things happen in order, but maybe there is a race. it is probably safe
-   * to just wait for 2 or 3 responses.
-   */
-
-  //
-  int seq = 0;
-  for (;;) {
-    ceph::bufferlist inbl, outbl;
-    std::string outstring;
-    double before, after;
-
-    // to remove noise, we might want to take the timestamps on the monitor
-    // and parse them out from the outstring here. we can do this if there is
-    // actually a lot of noise. its probably quite minimal.
-
-    before = ceph_clock_now(NULL);
-    ret = cluster.mon_command(cmd(seq), inbl, &outbl, &outstring);
-    after = ceph_clock_now(NULL);
-    assert(ret == 0);
-    std::cout << seq << "," << before << "," << after << std::endl;
-    seq++;
-  }
-
-  return 0;
-#endif
 }

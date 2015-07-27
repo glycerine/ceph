@@ -826,6 +826,7 @@ public:
       C_MonOp(_op), mon(_mm), rc(r), rs(s), rdata(rd), version(v){}
 
     virtual void _finish(int r) {
+      utime_t end_time = ceph_clock_now(NULL);
       MMonCommand *m = static_cast<MMonCommand*>(op->get_req());
       if (r >= 0) {
         ostringstream ss;
@@ -845,6 +846,9 @@ public:
         ss << "cmd='" << m->cmd << "': finished";
 
         mon->audit_clog->info() << ss.str();
+        ostringstream ss2;
+        ss2 << rs << " after_prop=" << end_time.to_nsec();
+        rs = ss2.str();
 	mon->reply_command(op, rc, rs, rdata, version);
       }
       else if (r == -ECANCELED)
