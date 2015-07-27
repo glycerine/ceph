@@ -6554,7 +6554,7 @@ done:
     if (err < 0)
       goto reply;
 
-    ss << " before_prop=" << before_proposal.to_nsec();
+    ss << " before_prop=" << before_proposal.to_msec();
     getline(ss, rs);
     wait_for_finished_proposal(op, new Monitor::C_Command(mon, op, 0, rs,
 						   get_last_committed() + 1));

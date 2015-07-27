@@ -6,6 +6,7 @@
 #include <string>
 #include <sstream>
 #include <lua.hpp>
+#include <boost/lexical_cast.hpp>
 #include "include/types.h"
 #include "objclass/objclass.h"
 #include "json_spirit/json_spirit.h"
@@ -388,8 +389,9 @@ static int clslua_map_clear(lua_State *L)
  */
 static int clslua_clock(lua_State *L)
 {
-  double time = (double)ceph_clock_now(NULL);
-  lua_pushnumber(L, time);
+  utime_t time = ceph_clock_now(NULL);
+  std::string timestr = boost::lexical_cast<std::string>(time.to_msec());
+  lua_pushstring(L, timestr.c_str());
   return 1;
 }
 

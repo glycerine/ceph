@@ -847,7 +847,7 @@ public:
 
         mon->audit_clog->info() << ss.str();
         ostringstream ss2;
-        ss2 << rs << " after_prop=" << end_time.to_nsec();
+        ss2 << rs << " after_prop=" << end_time.to_msec();
         rs = ss2.str();
 	mon->reply_command(op, rc, rs, rdata, version);
       }

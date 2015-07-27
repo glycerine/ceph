@@ -8,6 +8,7 @@
 #include "include/rados/librados.hpp"
 
 #define PRINT_COVERING_SET
+#define NUM_OBS 3
 
 typedef std::numeric_limits< double > dbl;
 
@@ -33,10 +34,11 @@ static boost::condition_variable load_thread_started; // load thread started
  * objnames[idx] = objname for idx
  * delays[seq][idx] = min delay for seq for idx
  */
-static int num_osds;
+static unsigned num_osds;
 static std::vector<int> outstanding_ios;
+static std::vector<int> observations;
 static std::vector<std::string> objnames;
-static std::map<int, std::map<int, double> > delays;
+static std::map<int, std::map<int, uint64_t> > delays;
 
 struct ExecCompletion {
   librados::AioCompletion *c;
@@ -53,19 +55,20 @@ static void exec_safe_cb(librados::completion_t cb, void *arg)
   std::string result(c->outbl.c_str(), c->outbl.length());
   size_t split = result.find(",");
   int seq = boost::lexical_cast<int>(result.substr(0, split));
-  double time = boost::lexical_cast<double>(result.substr(split+1));
+  uint64_t time = boost::lexical_cast<uint64_t>(result.substr(split+1));
 
   boost::unique_lock<boost::mutex> l(load_lock);
 
   assert(--outstanding_ios[c->idx] >= 0);
+  observations[c->idx]++;
 
-  std::map<int, std::map<int, double> >::iterator it = delays.find(seq);
+  std::map<int, std::map<int, uint64_t> >::iterator it = delays.find(seq);
   if (it == delays.end()) {
     delays[seq][c->idx] = time;
     it = delays.find(seq);
     assert(it != delays.end());
   } else {
-    std::map<int, double>::iterator it2 = it->second.find(c->idx);
+    std::map<int, uint64_t>::iterator it2 = it->second.find(c->idx);
     if (it2 == it->second.end())
       it->second[c->idx] = time;
     else
@@ -77,11 +80,18 @@ static void exec_safe_cb(librados::completion_t cb, void *arg)
   c->c->release();
   delete c;
 
-  // wait for 2-3 responses for each osd?
   it = delays.find(curr_seq);
   if (it != delays.end() && it->second.size() == num_osds) {
+    bool complete = true;
+    for (unsigned i = 0; i < observations.size(); i++) {
+      if (observations[i] < NUM_OBS) {
+        complete = false;
+        break;
+      }
+    }
     //std::cout << "notifying complete for seq: " << curr_seq << std::endl;
-    next_seq_cond.notify_one();
+    if (complete)
+      next_seq_cond.notify_one();
   }
 
   load_cond.notify_one();
@@ -104,7 +114,7 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
   load_thread_started.notify_one();
 
   for (;;) {
-    for (int i = 0; i < num_osds; i++) {
+    for (unsigned i = 0; i < num_osds; i++) {
       while (outstanding_ios[i] < queue_depth) {
         ExecCompletion *c = new ExecCompletion;
         c->idx = i;
@@ -120,6 +130,44 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
     }
     load_cond.wait(l);
   }
+}
+
+/*
+ *
+ */
+static void compute_covering_set(librados::Rados& cluster, librados::IoCtx& ioctx,
+    std::map<int, std::string>& out, std::string pool)
+{
+  unsigned counter = 0;
+  std::map<int, std::string> covering_set;
+  while (covering_set.size() != num_osds) {
+    std::stringstream ss;
+    ss << "obj." << counter++;
+    std::string objname = ss.str();
+    int osd = cluster.primary_osd(pool.c_str(), objname.c_str());
+    assert(osd >= 0);
+    std::map<int, std::string>::const_iterator it = covering_set.find(osd);
+    if (it == covering_set.end()) {
+      covering_set[osd] = objname;
+      continue;
+    }
+    if (counter > (num_osds * 10)) {
+      std::cout << "failing to find covering set. consider increasing pg_num/pgp_num" << std::endl;
+      ioctx.close();
+      cluster.shutdown();
+      exit(1);
+    }
+  }
+
+#ifdef PRINT_COVERING_SET
+  for (std::map<int, std::string>::const_iterator it = covering_set.begin();
+       it != covering_set.end(); it++) {
+    assert(it->first == cluster.primary_osd(pool.c_str(), it->second.c_str()));
+    std::cout << it->first << ": " << it->second << std::endl;
+  }
+#endif
+
+  out.swap(covering_set);
 }
 
 /*
@@ -188,52 +236,39 @@ int main(int argc, char **argv)
   assert(ret == 0);
 
   /*
-   * Compute covering set of objects
+   *
    */
   {
     boost::unique_lock<boost::mutex> l(load_lock);
     num_osds = cluster.num_osds();
     assert(num_osds > 0);
+
+    // causes callback to ignore initial set of delays because this curr_seq
+    // value will never be used in a valid installed script.
+    curr_seq = -1;
   }
 
-  int counter = 0;
+  /*
+   * Compute covering set of objects.
+   */
   std::map<int, std::string> covering_set;
-  while (covering_set.size() != num_osds) {
-    std::stringstream ss;
-    ss << "obj." << counter++;
-    std::string objname = ss.str();
-    int osd = cluster.primary_osd(pool.c_str(), objname.c_str());
-    assert(osd >= 0);
-    std::map<int, std::string>::const_iterator it = covering_set.find(osd);
-    if (it == covering_set.end()) {
-      covering_set[osd] = objname;
-      continue;
-    }
-    if (counter > (num_osds * 10)) {
-      std::cout << "failing to find covering set. consider increasing pg_num/pgp_num" << std::endl;
-      ioctx.close();
-      cluster.shutdown();
-      return 1;
-    }
-  }
-
-#ifdef PRINT_COVERING_SET
-  for (std::map<int, std::string>::const_iterator it = covering_set.begin();
-       it != covering_set.end(); it++) {
-    assert(it->first == cluster.primary_osd(pool.c_str(), it->second.c_str()));
-    std::cout << it->first << ": " << it->second << std::endl;
-  }
-#endif
-
-  cout.precision(dbl::digits10);
+  compute_covering_set(cluster, ioctx, covering_set, pool);
 
   /*
    * Ensure that a script is initially installed on all osds so that we don't
    * need a special case for dealing with errors during start-up.
    */
   const int initial_seq = 0;
-  curr_seq = -1;
+  assert(initial_seq > curr_seq);
   prime_osds(cluster, ioctx, covering_set, initial_seq, pool);
+
+  /*
+   * Observations is used by the callback to count how many delays have been
+   * observed per osd. We wait for NUM_OBS before considering the current
+   * sequence complete.
+   */
+  observations.resize(num_osds);
+  std::fill(observations.begin(), observations.end(), 0);
 
   /*
    * Start the load generator
@@ -252,15 +287,16 @@ int main(int argc, char **argv)
     {
       boost::unique_lock<boost::mutex> l(load_lock);
       curr_seq = seq;
+      std::fill(observations.begin(), observations.end(), 0);
     }
 
     // setup script for @seq number
-    //std::cout << "installed new seq: " << seq << std::endl;
     ceph::bufferlist inbl, outbl;
     std::string outstring;
     ret = cluster.mon_command(cmd(seq, pool), inbl, &outbl, &outstring);
     assert(ret == 0);
 
+    // grab timestamps from the monitor return string
     size_t pos1 = outstring.find("before_prop=");
     size_t pos2 = outstring.find("after_prop=");
     uint64_t before_prop = boost::lexical_cast<uint64_t>(outstring.substr(pos1+12, pos2-(pos1+13)));
@@ -269,28 +305,28 @@ int main(int argc, char **argv)
     // this races with notify_one in the callback, but it is safe because once
     // the current sequence is complete the callback will continue to issue
     // notifies until the sequence number is changed.
-    std::vector<double> seq_delays;
+    std::vector<uint64_t> seq_delays;
     {
       boost::unique_lock<boost::mutex> l(load_lock);
       //std::cout << "waiting on seq: " << seq << std::endl;
       next_seq_cond.wait(l);
 
       // grab a copy of the delays for this sequence
-      std::map<int, std::map<int, double> >::const_iterator it = delays.find(seq);
+      std::map<int, std::map<int, uint64_t> >::const_iterator it = delays.find(seq);
       assert(it != delays.end());
       assert(it->second.size() == num_osds);
-      for (std::map<int, double>::const_iterator it2 = it->second.begin();
+      for (std::map<int, uint64_t>::const_iterator it2 = it->second.begin();
            it2 != it->second.end(); it2++) {
         seq_delays.push_back(it2->second);
       }
     }
 
     // we now have a timestamp for every osd. we can compute the time delays
-    // and then install a new sequence number
-    double min, max, sum = 0.0;
+    // before looping around to start the next sequence
+    uint64_t min = 0, max = 0, sum = 0;
     assert(seq_delays.size() == num_osds);
     for (unsigned i = 0; i < seq_delays.size(); i++) {
-      double val = seq_delays[i];
+      uint64_t val = seq_delays[i];
       if (i == 0) {
         min = val;
         max = val;
@@ -299,11 +335,22 @@ int main(int argc, char **argv)
       max = std::max(max, val);
       sum += val;
     }
-    double avg = sum / (double)seq_delays.size();
+    uint64_t avg = sum / seq_delays.size();
+
+    assert(min >= after_prop);
+    assert(max >= after_prop);
+    assert(avg >= after_prop);
+    assert(after_prop > before_prop);
+
     std::cout << seq << " " << 
-      ((double)before_prop / (double)1000000000.0L) << " " <<
-      ((double)after_prop / (double)1000000000.0L) << " " <<
-      min << " " << max << " " << avg << std::endl;
+      before_prop << " " << after_prop << " " <<
+      "prop_diff=" << (after_prop - before_prop) << " " <<
+      min << " " << 
+      "min_diff=" << (min-after_prop) << " " <<
+      max << " " <<
+      "max_diff=" << (max-after_prop) << " " <<
+      avg << " " <<
+      "avg_diff=" << (avg-after_prop) << std::endl;
   }
 
   thread.join();
