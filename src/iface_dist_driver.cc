@@ -7,7 +7,6 @@
 #include <sstream>
 #include "include/rados/librados.hpp"
 
-#define PRINT_COVERING_SET
 #define NUM_OBS 3
 
 typedef std::numeric_limits< double > dbl;
@@ -136,7 +135,7 @@ static void load_thread_func(librados::Rados *cluster, librados::IoCtx& ioctx,
  *
  */
 static void compute_covering_set(librados::Rados& cluster, librados::IoCtx& ioctx,
-    std::map<int, std::string>& out, std::string pool)
+    std::map<int, std::string>& out, std::string pool, bool print_covering_set)
 {
   unsigned counter = 0;
   std::map<int, std::string> covering_set;
@@ -159,13 +158,13 @@ static void compute_covering_set(librados::Rados& cluster, librados::IoCtx& ioct
     }
   }
 
-#ifdef PRINT_COVERING_SET
-  for (std::map<int, std::string>::const_iterator it = covering_set.begin();
-       it != covering_set.end(); it++) {
-    assert(it->first == cluster.primary_osd(pool.c_str(), it->second.c_str()));
-    std::cout << it->first << ": " << it->second << std::endl;
+  if (print_covering_set) {
+    for (std::map<int, std::string>::const_iterator it = covering_set.begin();
+        it != covering_set.end(); it++) {
+      assert(it->first == cluster.primary_osd(pool.c_str(), it->second.c_str()));
+      std::cout << it->first << ": " << it->second << std::endl;
+    }
   }
-#endif
 
   out.swap(covering_set);
 }
@@ -211,11 +210,13 @@ int main(int argc, char **argv)
 {
   std::string pool;
   int queue_depth;
+  bool print_covering_set;
 
   po::options_description desc("Allowed options");
   desc.add_options()
     ("pool", po::value<std::string>(&pool)->required(), "Pool name")
     ("qdepth", po::value<int>(&queue_depth)->default_value(1), "Queue depth")
+    ("cover", po::value<bool>(&print_covering_set)->default_value(true), "Print covering set")
   ;
 
   po::variables_map vm;
@@ -252,7 +253,7 @@ int main(int argc, char **argv)
    * Compute covering set of objects.
    */
   std::map<int, std::string> covering_set;
-  compute_covering_set(cluster, ioctx, covering_set, pool);
+  compute_covering_set(cluster, ioctx, covering_set, pool, print_covering_set);
 
   /*
    * Ensure that a script is initially installed on all osds so that we don't
