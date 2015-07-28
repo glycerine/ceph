@@ -6,7 +6,7 @@ compiler:
 before_install:
   - brew update
   - brew install cryptopp libatomic_ops
-script: ./configure --with-debug --without-fuse --without-libaio
+script: ./autogen.sh && ./configure --with-debug --without-fuse --without-libaio
 branches:
   only:
     - master
