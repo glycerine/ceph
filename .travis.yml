@@ -1,0 +1,9 @@
+language: cpp
+os:
+  - osx
+compiler:
+  - clang
+branches:
+  only:
+    - master
+    - /^port.*$/
