@@ -338,9 +338,16 @@ int main(int argc, char **argv)
     }
     uint64_t avg = sum / seq_delays.size();
 
-    assert(min >= after_prop);
-    assert(max >= after_prop);
-    assert(avg >= after_prop);
+    /*
+     * These asserts seemed to make sense, but I think now on a second look.
+     * The after_prop timestamp is taken in the monitor after the proposal has
+     * completed. If the updates are fast and there is a delay, then we can
+     * observe the update in the OSDs before the monitor returns from proposal
+     * and takes the timestamp.
+     */
+    //assert(min >= after_prop);
+    //assert(max >= after_prop);
+    //assert(avg >= after_prop);
     assert(after_prop > before_prop);
 
     std::cout << seq << " " << 
