@@ -21,6 +21,9 @@ cls_method_handle_t h_eval_msgpack;
 cls_method_handle_t h_eval_json;
 cls_method_handle_t h_eval_bufferlist;
 
+cls_method_handle_t h_eval_empty;
+cls_method_handle_t h_write_input;
+
 /*
  * Jump point for recovering from Lua panic.
  */
@@ -833,6 +836,16 @@ static int eval_bufferlist(cls_method_context_t hctx, bufferlist *in, bufferlist
   return eval_generic(hctx, in, out, BUFFERLIST_ENC);
 }
 
+static int eval_empty(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  return 0;
+}
+
+static int write_input(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  return cls_cxx_write(hctx, 0, in->length(), in);
+}
+
 void __cls_init()
 {
   CLS_LOG(20, "Loaded lua class!");
@@ -847,4 +860,10 @@ void __cls_init()
 
   cls_register_cxx_method(h_class, "eval_bufferlist",
       CLS_METHOD_RD | CLS_METHOD_WR, eval_bufferlist, &h_eval_bufferlist);
+
+  cls_register_cxx_method(h_class, "native_empty",
+      CLS_METHOD_RD | CLS_METHOD_WR, eval_empty, &h_eval_empty);
+
+  cls_register_cxx_method(h_class, "native_write_input",
+      CLS_METHOD_RD | CLS_METHOD_WR, write_input, &h_write_input);
 }

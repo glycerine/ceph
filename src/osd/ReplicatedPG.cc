@@ -3634,11 +3634,16 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	tracepoint(osd, do_osd_op_pre_call, soid.oid.name.c_str(), soid.snap.val, cname.c_str(), mname.c_str());
 
+        bool is_lua_cost = cname == "lua_cost";
+        if (is_lua_cost)
+          cname = "lua";
+
 	ClassHandler::ClassData *cls;
 	result = osd->class_handler->open_class(cname, &cls);
 	assert(result == 0);   // init_op_flags() already verified this works.
 
 	ClassHandler::ClassMethod *method = cls->get_method(mname.c_str());
+        utime_t start = ceph_clock_now(NULL);
         if (!method) {
           /*
            * If the named method doesn't exist in the Lua object class then we
@@ -3672,6 +3677,13 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	int prev_rd = ctx->num_read;
 	int prev_wr = ctx->num_write;
 	result = method->exec((cls_method_context_t)&ctx, indata, outdata);
+        utime_t end = ceph_clock_now(NULL);
+        utime_t dur = end - start;
+
+        if (is_lua_cost) {
+          dout(1) << "call method " << cname << "." << mname << " cost "
+            << dur.to_nsec() << dendl;
+        }
 
 	if (ctx->num_read > prev_rd && !(flags & CLS_METHOD_RD)) {
 	  derr << "method " << cname << "." << mname << " tried to read object but is not marked RD" << dendl;
@@ -3685,7 +3697,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 
 	dout(10) << "method called response length=" << outdata.length() << dendl;
-	op.extent.length = outdata.length();
+        op.extent.length = outdata.length();
 	osd_op.outdata.claim_append(outdata);
 	dout(30) << "out dump: ";
 	osd_op.outdata.hexdump(*_dout);

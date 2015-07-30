@@ -36,6 +36,10 @@ iface_dist_driver_SOURCES = iface_dist_driver.cc
 iface_dist_driver_LDADD = $(LIBRADOS) $(CEPH_GLOBAL) -lboost_program_options
 bin_PROGRAMS += iface_dist_driver
 
+method_call_overhead_SOURCES = method_call_overhead.cc
+method_call_overhead_LDADD = $(LIBRADOS) $(CEPH_GLOBAL) -lboost_program_options
+bin_PROGRAMS += method_call_overhead
+
 bash_completion_DATA += \
 	$(srcdir)/bash_completion/rados \
 	$(srcdir)/bash_completion/radosgw-admin

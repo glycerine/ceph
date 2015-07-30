@@ -8591,6 +8591,9 @@ int OSD::init_op_flags(OpRequestRef& op)
 	bp.copy(iter->op.cls.class_len, cname);
 	bp.copy(iter->op.cls.method_len, mname);
 
+        if (cname == "lua_cost")
+          cname = "lua";
+
 	ClassHandler::ClassData *cls;
 	int r = class_handler->open_class(cname, &cls);
 	if (r) {
