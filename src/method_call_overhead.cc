@@ -48,6 +48,7 @@ int main(int argc, char **argv)
   bool lua_cost;
   int ops;
   std::string obj;
+  unsigned skip;
 
   po::options_description desc("Allowed options");
   desc.add_options()
@@ -58,6 +59,7 @@ int main(int argc, char **argv)
     ("lua_cost", po::value<bool>(&lua_cost)->default_value(false), "Print OSD lua cost")
     ("ops", po::value<int>(&ops)->default_value(0), "Num ops")
     ("obj", po::value<std::string>(&obj)->required(), "Object name")
+    ("skip", po::value<unsigned>(&skip)->default_value(0), "Skip sec")
   ;
 
   po::variables_map vm;
@@ -100,6 +102,9 @@ int main(int argc, char **argv)
     cls = "lua_cost";
   }
 
+  bool started = skip == 0;
+  utime_t start0 = ceph_clock_now(NULL);
+
   for (int i = 0; 1; i++) {
     ceph::bufferlist outbl;
     assert(inbl.length() == input_size);
@@ -107,7 +112,18 @@ int main(int argc, char **argv)
     ret = ioctx.exec(obj, cls.c_str(), method.c_str(), inbl, outbl);
     assert(ret == 0);
 
-    utime_t dur = ceph_clock_now(NULL) - start;
+    utime_t end = ceph_clock_now(NULL);
+
+    if (!started) {
+      assert(skip > 0);
+      if ( ((end-start0).to_msec()) > (skip * 1000)) {
+        started = true;
+        i = 0;
+      } else
+        continue;
+    }
+
+    utime_t dur = end - start;
     std::cout << i << ": " << dur.to_nsec() << std::endl;
 
     if (ops && i >= ops)
