@@ -47,6 +47,7 @@ int main(int argc, char **argv)
   unsigned input_size;
   bool lua_cost;
   int ops;
+  std::string obj;
 
   po::options_description desc("Allowed options");
   desc.add_options()
@@ -56,6 +57,7 @@ int main(int argc, char **argv)
     ("isize", po::value<unsigned>(&input_size)->default_value(0), "Input size")
     ("lua_cost", po::value<bool>(&lua_cost)->default_value(false), "Print OSD lua cost")
     ("ops", po::value<int>(&ops)->default_value(0), "Num ops")
+    ("obj", po::value<std::string>(&obj)->required(), "Object name")
   ;
 
   po::variables_map vm;
@@ -102,7 +104,7 @@ int main(int argc, char **argv)
     ceph::bufferlist outbl;
     assert(inbl.length() == input_size);
     utime_t start = ceph_clock_now(NULL);
-    ret = ioctx.exec("obj", cls.c_str(), method.c_str(), inbl, outbl);
+    ret = ioctx.exec(obj, cls.c_str(), method.c_str(), inbl, outbl);
     assert(ret == 0);
 
     utime_t dur = ceph_clock_now(NULL) - start;
