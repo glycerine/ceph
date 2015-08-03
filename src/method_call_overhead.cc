@@ -49,6 +49,7 @@ int main(int argc, char **argv)
   int ops;
   std::string obj;
   unsigned skip;
+  unsigned total_sec;
 
   po::options_description desc("Allowed options");
   desc.add_options()
@@ -60,6 +61,7 @@ int main(int argc, char **argv)
     ("ops", po::value<int>(&ops)->default_value(0), "Num ops")
     ("obj", po::value<std::string>(&obj)->required(), "Object name")
     ("skip", po::value<unsigned>(&skip)->default_value(0), "Skip sec")
+    ("dur", po::value<unsigned>(&total_sec)->default_value(0), "Duration")
   ;
 
   po::variables_map vm;
@@ -127,6 +129,9 @@ int main(int argc, char **argv)
     std::cout << i << ": " << dur.to_nsec() << std::endl;
 
     if (ops && i >= ops)
+      break;
+
+    if (total_sec && ((end-start0).to_msec() > ((skip+total_sec) * 1000)))
       break;
   }
 
