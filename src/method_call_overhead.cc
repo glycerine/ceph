@@ -38,7 +38,8 @@ static void install_script(librados::Rados& cluster, std::string pool, std::stri
   std::string outstring;
   int ret = cluster.mon_command(cmd(method, pool), inbl, &outbl, &outstring);
   assert(ret == 0);
-  sleep(2);
+  sleep(10);
+  cluster.wait_for_latest_osdmap();
 }
 
 int main(int argc, char **argv)
@@ -49,6 +50,8 @@ int main(int argc, char **argv)
   int ops;
   std::string obj;
   unsigned skip;
+  unsigned total_sec;
+  bool get_obj;
 
   po::options_description desc("Allowed options");
   desc.add_options()
@@ -60,6 +63,8 @@ int main(int argc, char **argv)
     ("ops", po::value<int>(&ops)->default_value(0), "Num ops")
     ("obj", po::value<std::string>(&obj)->required(), "Object name")
     ("skip", po::value<unsigned>(&skip)->default_value(0), "Skip sec")
+    ("dur", po::value<unsigned>(&total_sec)->default_value(0), "Duration")
+    ("getobj", po::value<bool>(&get_obj)->default_value(false), "Get obj")
   ;
 
   po::variables_map vm;
@@ -78,6 +83,37 @@ int main(int argc, char **argv)
   librados::IoCtx ioctx;
   ret = cluster.ioctx_create(pool.c_str(), ioctx);
   assert(ret == 0);
+
+  if (get_obj) {
+    std::vector<std::string> pools;
+    pools.push_back("rep1");
+    pools.push_back("rep2");
+    pools.push_back("rep3");
+    unsigned count = 0;
+    while (1) {
+      std::stringstream ss;
+      ss << "obj" << count++;
+      int osd = cluster.primary_osd(pools[0].c_str(), ss.str().c_str());
+      assert(osd >= 0);
+      if (osd == 0) {
+        bool ok = true;
+        for (unsigned i = 0; i < pools.size(); i++) {
+          int osd = cluster.primary_osd(pools[i].c_str(), ss.str().c_str());
+          assert(osd >= 0);
+          if (osd != 0) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          std::cout << ss.str() << std::endl;
+	  ioctx.close();
+	  cluster.shutdown();
+          return 0;
+        }
+      }
+    }
+  }
 
   // install script based on the method name that will be called.
   install_script(cluster, pool, method);
@@ -127,6 +163,9 @@ int main(int argc, char **argv)
     std::cout << i << ": " << dur.to_nsec() << std::endl;
 
     if (ops && i >= ops)
+      break;
+
+    if (total_sec && ((end-start0).to_msec() > ((skip+total_sec) * 1000)))
       break;
   }
 
