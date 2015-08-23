@@ -51,6 +51,10 @@ noinst_LIBRARIES += libcls_user_client.a
 libcls_cephfs_client_la_SOURCES = cls/cephfs/cls_cephfs_client.cc
 noinst_LTLIBRARIES += libcls_cephfs_client.la
 
+libcls_zlog_client_la_SOURCES = \
+	cls/zlog/cls_zlog_client.cc
+lib_LTLIBRARIES += libcls_zlog_client.la
+
 noinst_HEADERS += \
 	cls/lock/cls_lock_types.h \
 	cls/lock/cls_lock_ops.h \
